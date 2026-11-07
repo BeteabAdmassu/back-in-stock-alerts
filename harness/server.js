@@ -2,7 +2,7 @@
 // Back-in-Stock challenge test harness.
 // - Mock stock API candidates call:      GET  /api/stock/:sku
 // - Mock Resend API candidates send to:  POST /emails (and /emails/batch)
-// - Sends stock webhooks to candidate apps and runs a graded test suite.
+// - Sends stock webhooks to candidate apps and simulates a live store.
 // Zero dependencies. State is kept in DATA_DIR/db.json.
 
 const http = require('node:http');
@@ -48,7 +48,7 @@ function newCandidate(name, profile) {
     apiKey: 're_test_' + rand(12), webhookSecret: 'whsec_' + rand(12),
     baseUrl: '', createdAt: now(),
     stock: {}, emails: [], webhooks: [], stockChecks: [],
-    failNextEmails: 0, failFor: {}, runs: [],
+    failNextEmails: 0, failFor: {},
   };
   ensureSim(c);
   db.candidates[c.id] = c; save();
@@ -155,7 +155,7 @@ async function simPhantom(c, o = {}) {
 }
 async function simTick(c, forced = false) {
   ensureSim(c);
-  if (!c.baseUrl || c.runs.some((r) => r.status === 'running')) return;
+  if (!c.baseUrl || ext?.busy?.(c)) return;
   if (!forced && (!c.sim.on || c.sim.paused)) return;
   if (!c.sim.seeded) {
     c.sim.seeded = true;
@@ -270,9 +270,9 @@ async function sendWebhook(c, { sku, quantity, eventId, secret, source }) {
   pushCapped(c.webhooks, rec, 300); save();
   return rec;
 }
-// Optional private grader (harness/grader.js). Without it, the harness is a sandbox only.
-let grader = null;
-try { grader = require('./grader.js')({ rand, now, sleep, save, sendWebhook, esc, fmt }); }
+// Optional local extensions (harness/extensions.js). The server runs fine without them.
+let ext = null;
+try { ext = require('./extensions.js')({ db, rand, now, sleep, save, sendWebhook, esc, fmt, readForm, redirect, send, cleanUrl: (u) => cleanUrl(u) }); }
 catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; }
 
 // ---------- pages ----------
@@ -290,7 +290,7 @@ ${INVITE_CODE ? '<input name="invite" placeholder="Invite code" required maxleng
 
 function dashboard(c) {
   ensureSim(c);
-  const skus = Object.keys(c.stock).filter((s) => !/^T[0-9A-F]{6}-[ABCD]$/.test(s) && !CATALOG_BY_SKU[s]);
+  const skus = Object.keys(c.stock).filter((s) => !CATALOG_BY_SKU[s]);
   const simState = !c.baseUrl ? 'Waiting for your app URL' : c.sim.paused ? c.sim.paused : c.sim.on ? `Running: something happens about every ${SIM_INTERVAL_MS / 1000}s` : 'Stopped';
   const emails = c.emails.slice(-50).reverse();
   const hooks = c.webhooks.slice(-30).reverse();
@@ -358,20 +358,16 @@ function adminList() {
   const cs = Object.values(db.candidates).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return page('Admin · Back-in-Stock', `<h1>Candidates</h1>
 <div class="card"><form method="post" action="/admin/new" class="inline"><input name="name" placeholder="Candidate name" required><input name="profile" placeholder="Upwork profile"><button>Add candidate</button></form></div>
-<div class="card"><table><tr><th>Name</th><th>Signed up</th><th>App URL</th><th>Emails</th><th>Last score</th><th></th></tr>
-${cs.map((c) => { const r = c.runs[0]; return `<tr><td>${esc(c.name)}${c.profile ? `<div class="muted">${esc(c.profile)}</div>` : ''}</td><td>${fmt(c.createdAt)}</td><td>${c.baseUrl ? `<a href="${esc(c.baseUrl)}" target="_blank" rel="noopener">${esc(c.baseUrl)}</a>` : '<span class="muted">not set</span>'}</td><td>${c.emails.length}</td><td>${r ? (r.status === 'running' ? 'running...' : `${r.score}/${r.maxScore}`) : '–'}</td><td><a href="/admin/c/${c.id}">open</a></td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">No candidates yet</td></tr>'}
+<div class="card"><table><tr><th>Name</th><th>Signed up</th><th>App URL</th><th>Emails</th>${ext?.listHeader || ''}<th></th></tr>
+${cs.map((c) => { return `<tr><td>${esc(c.name)}${c.profile ? `<div class="muted">${esc(c.profile)}</div>` : ''}</td><td>${fmt(c.createdAt)}</td><td>${c.baseUrl ? `<a href="${esc(c.baseUrl)}" target="_blank" rel="noopener">${esc(c.baseUrl)}</a>` : '<span class="muted">not set</span>'}</td><td>${c.emails.length}</td>${ext?.listCell ? ext.listCell(c) : ''}<td><a href="/admin/c/${c.id}">open</a></td></tr>`; }).join('') || '<tr><td colspan="7" class="muted">No candidates yet</td></tr>'}
 </table></div>`);
 }
 
 function adminCandidate(c) {
-  const running = c.runs.some((r) => r.status === 'running');
   return page(`Admin · ${c.name}`, `<p><a href="/admin">All candidates</a></p><h1>${esc(c.name)}</h1>
 <p class="muted">${esc(c.profile)} · <a href="/c/${c.token}" target="_blank" rel="noopener">candidate dashboard</a> (share this link with the candidate)</p>
-<p>${c.testApiCalls ? `<span class="ok">Found the test API</span>: ${c.testApiCalls} call(s), last ${fmt(c.testApiLastAt)}` : '<span class="muted">Has not used the test API</span>'}</p>
-${grader ? `<div class="card"><form method="post" action="/admin/c/${c.id}/run" class="inline">
-<input name="baseUrl" value="${esc(c.baseUrl)}" placeholder="https://their-app.example.com" style="flex:1;min-width:260px" required>
-<button ${running ? 'disabled' : ''}>${running ? 'Running...' : 'Run graded test (about 45s)'}</button></form></div>` : ''}
-${grader ? (c.runs.map((r) => grader.runReport(c, r)).join('') || '<p class="muted">No runs yet.</p>') : ''}`, { refresh: running ? 3 : undefined });
+<div class="card">App URL: ${c.baseUrl ? `<a href="${esc(c.baseUrl)}" target="_blank" rel="noopener">${esc(c.baseUrl)}</a>` : '<span class="muted">not set</span>'} · ${c.emails.length} email(s) · ${c.webhooks.length} webhook(s)</div>
+${ext?.adminSection ? ext.adminSection(c) : ''}`, { refresh: ext?.refresh?.(c) });
 }
 
 function checkAdmin(req, res) {
@@ -486,27 +482,19 @@ async function route(req, res) {
       const c = newCandidate(String(f.name || '').slice(0, 80) || 'Unnamed', String(f.profile || '').slice(0, 200));
       return redirect(res, `/admin/c/${c.id}`);
     }
-    if ((mm = p.match(/^\/admin\/c\/(\w+)(\/run)?$/))) {
+    if (m === 'GET' && (mm = p.match(/^\/admin\/c\/(\w+)$/))) {
       const c = db.candidates[mm[1]];
-      if (!c) return send(res, 404, 'Not found');
-      if (m === 'GET' && !mm[2]) return html(res, adminCandidate(c));
-      if (m === 'POST' && mm[2]) {
-        const f = await readForm(req);
-        const u = cleanUrl(f.baseUrl);
-        if (u) c.baseUrl = u;
-        if (c.baseUrl && !c.runs.some((r) => r.status === 'running')) grader?.runSuite(c).catch((e) => console.error(e));
-        return redirect(res, `/admin/c/${c.id}`);
-      }
+      return c ? html(res, adminCandidate(c)) : send(res, 404, 'Not found');
     }
+    if (ext?.adminRoute && (await ext.adminRoute(req, res, p, m))) return;
     return send(res, 404, 'Not found');
   }
 
   return send(res, 404, 'Not found');
 }
 
-// A run that was in progress when the process stopped can never finish.
 for (const c of Object.values(db.candidates)) ensureSim(c);
-for (const c of Object.values(db.candidates)) for (const r of c.runs) if (r.status === 'running') { r.status = 'interrupted'; r.finishedAt = now(); }
+ext?.init?.();
 
 http.createServer((req, res) => {
   route(req, res).catch((e) => { console.error(e); if (!res.headersSent) send(res, 500, 'Internal error'); });

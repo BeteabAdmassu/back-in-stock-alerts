@@ -1,10 +1,4 @@
-# private: grading
-harness/grader.js
-GRADING.md
-CHALLENGE.md
-# runtime
 data/
 harness/data/
 node_modules/
 .env
-grade.sh

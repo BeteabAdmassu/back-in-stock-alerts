@@ -1,2 +1,0 @@
-# Railway reads .gitignore too; the private grader must still be deployed.
-!harness/grader.js

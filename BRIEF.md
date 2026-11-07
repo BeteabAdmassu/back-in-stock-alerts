@@ -35,6 +35,7 @@ STOCK_API_KEY
 RESEND_API_KEY
 RESEND_BASE_URL    send email here, not api.resend.com
 WEBHOOK_SECRET
+ADMIN_PASSWORD     your choice: protects /admin
 ```
 
 ## Where you have freedom
