@@ -38,8 +38,9 @@ We care about the form, the admin page and the email looking like a real product
 
 ## Send us
 
-- Live URL + repo
-- A short README: how to run it, and how you stop customers getting duplicate or missed emails
+- **A GitHub repo with a working `Dockerfile`**: `docker build` + `docker run` with the env vars above, and nothing else, must bring it up on `$PORT`. (A public image URL such as `ghcr.io/...` also works.)
+- **A live URL** where it's already running from that same container
+- A short README: env vars, how to run it, and how you stop customers getting duplicate or missed emails
 - Which AI tools you used, and how long it took
 
 No real customer data or production credentials.
