@@ -4,7 +4,12 @@ Customers ask to be emailed when a sold-out item comes back. Build it, ship it, 
 Use AI tools as much as you like. We expect this to take under an hour.
 
 **Test server:** https://harness-production-e601.up.railway.app (invite code `stock-e11d21`)
-Sign up there to get your keys, stock controls, a webhook sender and an inbox that catches your emails.
+Sign up there to get your keys and an inbox that catches your emails. It runs a simulated store: a
+catalogue of products, customers asking about sold-out items, and products restocking and selling out,
+all the time. Point it at your app and watch it fill up.
+
+Your app doesn't need to be on the public internet. To receive our webhooks while you build, use a
+tunnel (ngrok, cloudflared), or run the test server yourself: `node harness/server.js` from this repo.
 
 ## Must have
 
@@ -24,7 +29,8 @@ Sign up there to get your keys, stock controls, a webhook sender and an inbox th
 ## Your env
 
 ```
-STOCK_API_URL      GET {url}/{sku} → { quantity, in_stock }   (Bearer STOCK_API_KEY)
+STOCK_API_URL      GET {url}/{sku} → { quantity, in_stock, ... }   GET {url} → the catalogue
+                   (Bearer STOCK_API_KEY)
 STOCK_API_KEY
 RESEND_API_KEY
 RESEND_BASE_URL    send email here, not api.resend.com
@@ -39,7 +45,7 @@ We care about the form, the admin page and the email looking like a real product
 ## Send us (in your Upwork proposal)
 
 - **A GitHub repo with a working `Dockerfile`**: `docker build` + `docker run` with the env vars above, and nothing else, must bring it up on `$PORT`. (A public image URL such as `ghcr.io/...` also works.)
-- **A live URL** where it's already running from that same container
+- A live URL if you have one (optional)
 - A short README: env vars, how to run it, and how you stop customers getting duplicate or missed emails
 - Which AI tools you used, and how long it took
 

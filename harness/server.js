@@ -50,9 +50,133 @@ function newCandidate(name, profile) {
     stock: {}, emails: [], webhooks: [], stockChecks: [],
     failNextEmails: 0, failFor: {}, runs: [],
   };
+  ensureSim(c);
   db.candidates[c.id] = c; save();
   return c;
 }
+// ---------- simulated store ----------
+const SIM_INTERVAL_MS = 1000 * Number(process.env.SIM_INTERVAL_SECONDS || 30);
+const CATALOG = [
+  ['TEE-ORG-WHT-M', 'Organic Cotton Tee, White, M', 24, 'Apparel'],
+  ['TEE-ORG-BLK-L', 'Organic Cotton Tee, Black, L', 24, 'Apparel'],
+  ['HOOD-FLC-GRY-M', 'Fleece Hoodie, Heather Grey, M', 58, 'Apparel'],
+  ['SOCK-MRN-3PK', 'Merino Socks, 3-pack', 19, 'Apparel'],
+  ['CAP-WAX-OLV', 'Waxed Canvas Cap, Olive', 32, 'Accessories'],
+  ['TOTE-CNV-NAT', 'Heavy Canvas Tote, Natural', 28, 'Accessories'],
+  ['BTL-STL-750', 'Insulated Steel Bottle, 750 ml', 35, 'Kitchen'],
+  ['MUG-STN-SAGE', 'Stoneware Mug, Sage', 18, 'Kitchen'],
+  ['KNF-CHF-20', "Chef's Knife, 20 cm", 89, 'Kitchen'],
+  ['PAN-CI-26', 'Cast Iron Skillet, 26 cm', 64, 'Kitchen'],
+  ['GRND-BRR-01', 'Burr Coffee Grinder', 149, 'Coffee'],
+  ['BEAN-ETH-250', 'Ethiopia Yirgacheffe Beans, 250 g', 14, 'Coffee'],
+  ['KTL-GSN-BLK', 'Gooseneck Kettle, Matte Black', 79, 'Coffee'],
+  ['CNDL-CDR-200', 'Cedar & Smoke Candle, 200 g', 26, 'Home'],
+  ['THRW-WOL-OAT', 'Wool Throw, Oatmeal', 120, 'Home'],
+  ['LAMP-DSK-BRS', 'Brass Desk Lamp', 135, 'Home'],
+  ['PLNT-MON-M', 'Monstera in Ceramic Pot, Medium', 45, 'Home'],
+  ['NB-DOT-A5', 'Dot Grid Notebook, A5', 16, 'Stationery'],
+  ['PEN-FTN-NVY', 'Fountain Pen, Navy', 42, 'Stationery'],
+  ['BAG-LTH-TAN', 'Leather Weekender, Tan', 289, 'Accessories'],
+].map(([sku, name, price, category]) => ({ sku, name, price, currency: 'GBP', category, image: `https://picsum.photos/seed/${sku}/600/600` }));
+const CATALOG_BY_SKU = Object.fromEntries(CATALOG.map((p) => [p.sku, p]));
+const FIRST = ['amira', 'ben', 'chloe', 'dev', 'ella', 'finn', 'grace', 'hugo', 'isla', 'jamal', 'kate', 'leo', 'maya', 'noah', 'olivia', 'priya', 'quinn', 'rosa', 'sam', 'tom', 'uma', 'vik', 'willow', 'yusuf', 'zara'];
+const LAST = ['adams', 'brown', 'chen', 'davies', 'evans', 'fischer', 'garcia', 'hughes', 'ito', 'jones', 'khan', 'lewis', 'murphy', 'novak', 'okafor', 'patel', 'reid', 'smith', 'taylor', 'walsh'];
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+function ensureSim(c) {
+  if (!c.sim) c.sim = { on: true, paused: '', fails: 0, seeded: false, log: [], customers: [] };
+  if (!c.sim.catalogInit) {
+    for (const p of CATALOG) if (c.stock[p.sku] === undefined) c.stock[p.sku] = Math.random() < 0.45 ? 0 : 3 + Math.floor(Math.random() * 40);
+    c.sim.catalogInit = true;
+  }
+}
+const simBusy = new Set();
+function simLog(c, text, ok = true) { pushCapped(c.sim.log, { at: now(), text, ok }, 150); save(); }
+async function simPost(c, p, body) {
+  try {
+    const r = await fetch(c.baseUrl + p, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'bis-store-sim/1' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+    });
+    return { status: r.status };
+  } catch (e) { return { status: 0, error: String(e.message || e) }; }
+}
+function simHealth(c, reachable) {
+  if (reachable) { c.sim.fails = 0; return; }
+  if (++c.sim.fails >= 10) c.sim.paused = 'Paused: your app could not be reached 10 times in a row. Resume once it is up.';
+}
+// Each action takes optional overrides (o) so the test API can force a specific event.
+const hookOk = (h) => h.status >= 200 && h.status < 300;
+const hookDesc = (hs) => hs.map((h) => h.error || 'HTTP ' + h.status).join(', ');
+async function simCustomerSignup(c, o = {}) {
+  const out = CATALOG.filter((p) => !c.stock[p.sku]);
+  const sku = o.sku || (Math.random() < 0.85 && out.length ? pick(out) : pick(CATALOG)).sku;
+  const reuse = !o.email && c.sim.customers.length > 5 && Math.random() < 0.3;
+  const email = o.email || (reuse ? pick(c.sim.customers) : `${pick(FIRST)}.${pick(LAST)}${Math.floor(Math.random() * 90) + 10}@example.com`);
+  if (!reuse && !o.email) pushCapped(c.sim.customers, email, 200);
+  const r = await simPost(c, '/api/requests', { email, sku });
+  simHealth(c, r.status !== 0);
+  simLog(c, `${o.via || 'Customer'} ${email} asked about ${sku} → ${r.error ? r.error : 'HTTP ' + r.status}`, r.status >= 200 && r.status < 500);
+  return { action: 'request', email, sku, app_status: r.status, error: r.error };
+}
+async function simRestock(c, o = {}) {
+  const out = CATALOG.filter((p) => !c.stock[p.sku]);
+  if (!o.sku && !out.length) return simSellout(c, o);
+  const sku = o.sku || pick(out).sku;
+  const qty = o.quantity > 0 ? Math.floor(o.quantity) : 2 + Math.floor(Math.random() * 30);
+  c.stock[sku] = qty;
+  const eventId = o.event_id || `evt_${rand(6)}`;
+  const twice = o.twice ?? Math.random() < 0.2;
+  const hooks = await Promise.all([sendWebhook(c, { sku, quantity: qty, eventId, source: o.via || 'sim' }),
+    ...(twice ? [sendWebhook(c, { sku, quantity: qty, eventId, source: o.via || 'sim' })] : [])]);
+  simHealth(c, hooks.some((h) => !h.error));
+  simLog(c, `${o.via ? o.via + ': r' : 'R'}estocked ${sku} to ${qty}${twice ? ' (webhook delivered twice)' : ''} → ${hookDesc(hooks)}`, hooks.every(hookOk));
+  return { action: 'restock', sku, quantity: qty, event_id: eventId, deliveries: hooks.map((h) => h.error || h.status) };
+}
+async function simSellout(c, o = {}) {
+  const inStock = CATALOG.filter((p) => c.stock[p.sku] > 0);
+  if (!o.sku && !inStock.length) return simRestock(c, o);
+  const sku = o.sku || pick(inStock).sku;
+  c.stock[sku] = 0;
+  const eventId = o.event_id || `evt_${rand(6)}`;
+  const h = await sendWebhook(c, { sku, quantity: 0, eventId, source: o.via || 'sim' });
+  simHealth(c, !h.error);
+  simLog(c, `${o.via ? o.via + ': s' : 'S'}old out ${sku} → ${hookDesc([h])}`, hookOk(h));
+  return { action: 'sellout', sku, event_id: eventId, deliveries: [h.error || h.status] };
+}
+async function simPhantom(c, o = {}) {
+  const out = CATALOG.filter((p) => !c.stock[p.sku]);
+  if (!o.sku && !out.length) return { action: 'phantom', skipped: 'nothing is sold out' };
+  const sku = o.sku || pick(out).sku;
+  const eventId = o.event_id || `evt_${rand(6)}`;
+  const h = await sendWebhook(c, { sku, quantity: o.quantity > 0 ? Math.floor(o.quantity) : 12, eventId, source: o.via || 'sim' });
+  simLog(c, `${o.via ? o.via + ': w' : 'W'}ebhook claimed ${sku} is back, but stock is still ${c.stock[sku] || 0} → ${hookDesc([h])}`, hookOk(h));
+  return { action: 'phantom', sku, event_id: eventId, deliveries: [h.error || h.status] };
+}
+async function simTick(c, forced = false) {
+  ensureSim(c);
+  if (!c.baseUrl || c.runs.some((r) => r.status === 'running')) return;
+  if (!forced && (!c.sim.on || c.sim.paused)) return;
+  if (!c.sim.seeded) {
+    c.sim.seeded = true;
+    simLog(c, 'Store simulation started: sending the first customer requests');
+    for (let i = 0; i < 6; i++) await simCustomerSignup(c);
+    return;
+  }
+  if (Math.random() < 0.7) await simCustomerSignup(c);
+  const roll = Math.random();
+  if (roll < 0.3) await simRestock(c);
+  else if (roll < 0.5) await simSellout(c);
+  else if (roll < 0.55) await simPhantom(c);
+}
+setInterval(() => {
+  for (const c of Object.values(db.candidates)) {
+    if (simBusy.has(c.id) || !c.baseUrl) continue;
+    simBusy.add(c.id);
+    simTick(c).catch((e) => console.error('sim', e)).finally(() => simBusy.delete(c.id));
+  }
+}, SIM_INTERVAL_MS);
+
 const byToken = (t) => Object.values(db.candidates).find((c) => c.token === t);
 const byKey = (k) => k && Object.values(db.candidates).find((c) => c.apiKey === k);
 
@@ -165,7 +289,9 @@ ${INVITE_CODE ? '<input name="invite" placeholder="Invite code" required maxleng
 }
 
 function dashboard(c) {
-  const skus = Object.keys(c.stock).filter((s) => !/^T[0-9A-F]{6}-[ABCD]$/.test(s));
+  ensureSim(c);
+  const skus = Object.keys(c.stock).filter((s) => !/^T[0-9A-F]{6}-[ABCD]$/.test(s) && !CATALOG_BY_SKU[s]);
+  const simState = !c.baseUrl ? 'Waiting for your app URL' : c.sim.paused ? c.sim.paused : c.sim.on ? `Running: something happens about every ${SIM_INTERVAL_MS / 1000}s` : 'Stopped';
   const emails = c.emails.slice(-50).reverse();
   const hooks = c.webhooks.slice(-30).reverse();
   const checks = c.stockChecks.slice(-30).reverse();
@@ -185,11 +311,24 @@ WEBHOOK_SECRET=${c.webhookSecret}</pre></div>
 <button>Save URL</button></form>
 <p class="muted">We send webhooks to <code>${esc(c.baseUrl || '<your url>')}/webhooks/stock</code>.</p></div>
 
-<h2>Stock</h2>
+<h2>Simulated store</h2>
+<div class="card"><p><b>${esc(simState)}</b></p>
+<p class="muted">Once your app URL is saved, simulated customers ask about sold-out products, products restock and sell out, and webhooks arrive, all the time.
+Sometimes a webhook is delivered twice, and sometimes a webhook claims a product is back when it isn't.
+<code>GET ${PUBLIC_URL}/api/stock</code> lists the catalogue.</p>
+<form method="post" action="${base}/sim" class="inline">
+${c.sim.on && !c.sim.paused ? '<button name="action" value="stop">Stop simulation</button>' : '<button name="action" value="start">Start simulation</button>'}</form>
+<details><summary>Activity (latest first)</summary><table>${c.sim.log.slice(-40).reverse().map((l) => `<tr><td>${fmt(l.at)}</td><td class="${l.ok ? '' : 'bad'}">${esc(l.text)}</td></tr>`).join('') || '<tr><td class="muted">Nothing yet</td></tr>'}</table></details></div>
+
+<h2>Catalogue</h2>
+<div class="card"><table><tr><th>SKU</th><th>Product</th><th>Price</th><th>Stock</th></tr>
+${CATALOG.map((pr) => `<tr><td><code>${pr.sku}</code></td><td>${esc(pr.name)}</td><td>£${pr.price}</td><td>${c.stock[pr.sku] ? c.stock[pr.sku] : '<span class="bad">sold out</span>'}</td></tr>`).join('')}</table></div>
+
+<h2>Set stock by hand</h2>
 <div class="card"><form method="post" action="${base}/stock" class="inline">
 <input name="sku" placeholder="SKU, e.g. ABC-1" required maxlength="64"><input name="quantity" type="number" min="0" value="5" style="width:90px">
 <button>Set stock</button></form>
-<table><tr><th>SKU</th><th>Quantity</th></tr>${skus.map((s) => `<tr><td>${esc(s)}</td><td>${c.stock[s]}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No SKUs yet. Unknown SKUs return quantity 0.</td></tr>'}</table></div>
+<table><tr><th>SKU</th><th>Quantity</th></tr>${skus.map((s) => `<tr><td>${esc(s)}</td><td>${c.stock[s]}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">Catalogue SKUs are listed above. Any other SKU returns quantity 0 until you set it here.</td></tr>'}</table></div>
 
 <h2>Send a webhook</h2>
 <div class="card"><form method="post" action="${base}/webhook" class="inline">
@@ -228,6 +367,7 @@ function adminCandidate(c) {
   const running = c.runs.some((r) => r.status === 'running');
   return page(`Admin · ${c.name}`, `<p><a href="/admin">All candidates</a></p><h1>${esc(c.name)}</h1>
 <p class="muted">${esc(c.profile)} · <a href="/c/${c.token}" target="_blank" rel="noopener">candidate dashboard</a> (share this link with the candidate)</p>
+<p>${c.testApiCalls ? `<span class="ok">Found the test API</span>: ${c.testApiCalls} call(s), last ${fmt(c.testApiLastAt)}` : '<span class="muted">Has not used the test API</span>'}</p>
 ${grader ? `<div class="card"><form method="post" action="/admin/c/${c.id}/run" class="inline">
 <input name="baseUrl" value="${esc(c.baseUrl)}" placeholder="https://their-app.example.com" style="flex:1;min-width:260px" required>
 <button ${running ? 'disabled' : ''}>${running ? 'Running...' : 'Run graded test (about 45s)'}</button></form></div>` : ''}
@@ -264,14 +404,34 @@ async function route(req, res) {
   }
 
   // Mock stock API
-  if (m === 'GET' && (mm = p.match(/^\/api\/stock\/(.+)$/))) {
+  if (m === 'GET' && (mm = p.match(/^\/api\/stock(?:\/(.*))?$/))) {
     const auth = req.headers.authorization || '';
     const c = byKey(auth.startsWith('Bearer ') ? auth.slice(7).trim() : url.searchParams.get('key'));
     if (!c) return json(res, 401, { error: 'Missing or invalid API key. Use Authorization: Bearer <STOCK_API_KEY>.' });
-    const sku = decodeURIComponent(mm[1]).trim();
+    ensureSim(c);
+    const sku = decodeURIComponent(mm[1] || '').trim();
+    if (!sku) return json(res, 200, { products: CATALOG.map((pr) => ({ ...pr, quantity: c.stock[pr.sku] || 0, in_stock: c.stock[pr.sku] > 0 })) });
     const quantity = Number(c.stock[sku] ?? c.stock[sku.toUpperCase()] ?? 0);
     pushCapped(c.stockChecks, { at: now(), sku, quantity }, 500); save();
-    return json(res, 200, { sku, quantity, in_stock: quantity > 0 });
+    return json(res, 200, { ...(CATALOG_BY_SKU[sku.toUpperCase()] || {}), sku, quantity, in_stock: quantity > 0 });
+  }
+
+  // Test API: force store events. Same key as the stock API.
+  if (m === 'POST' && (mm = p.match(/^\/api\/test\/(restock|sellout|request|phantom|tick)$/))) {
+    const auth = req.headers.authorization || '';
+    const c = byKey(auth.startsWith('Bearer ') ? auth.slice(7).trim() : url.searchParams.get('key'));
+    if (!c) return json(res, 401, { error: 'Missing or invalid API key.' });
+    if (!c.baseUrl) return json(res, 409, { error: 'Save your app URL on the dashboard first.' });
+    let o = {};
+    try { const b = await readBody(req); o = b ? JSON.parse(b) : {}; } catch { return json(res, 400, { error: 'Body must be JSON.' }); }
+    o = { sku: o.sku ? String(o.sku).slice(0, 64) : undefined, quantity: Number(o.quantity) || undefined, email: o.email ? String(o.email).slice(0, 200) : undefined,
+      event_id: o.event_id ? String(o.event_id).slice(0, 64) : undefined, twice: typeof o.twice === 'boolean' ? o.twice : undefined, via: 'Test API' };
+    ensureSim(c);
+    c.testApiCalls = (c.testApiCalls || 0) + 1; c.testApiLastAt = now();
+    const fn = { restock: simRestock, sellout: simSellout, request: simCustomerSignup, phantom: simPhantom }[mm[1]];
+    const result = fn ? await fn(c, o) : (await simTick(c, true), { action: 'tick' });
+    save();
+    return json(res, 200, result);
   }
 
   // Mock Resend API
@@ -305,7 +465,8 @@ async function route(req, res) {
     }
     if (m === 'POST') {
       const f = await readForm(req);
-      if (sub === '/baseurl') { c.baseUrl = cleanUrl(f.baseUrl); save(); return redirect(res, back); }
+      if (sub === '/baseurl') { c.baseUrl = cleanUrl(f.baseUrl); ensureSim(c); c.sim.paused = ''; c.sim.fails = 0; save(); return redirect(res, back); }
+      if (sub === '/sim') { ensureSim(c); c.sim.on = f.action === 'start'; c.sim.paused = ''; c.sim.fails = 0; save(); return redirect(res, back); }
       if (sub === '/stock') { const s = String(f.sku || '').trim().slice(0, 64); if (s) c.stock[s] = Math.max(0, Number(f.quantity) || 0); save(); return redirect(res, back); }
       if (sub === '/fail') { c.failNextEmails = Math.min(20, Math.max(0, Number(f.n) || 0)); save(); return redirect(res, back); }
       if (sub === '/webhook') {
@@ -344,6 +505,7 @@ async function route(req, res) {
 }
 
 // A run that was in progress when the process stopped can never finish.
+for (const c of Object.values(db.candidates)) ensureSim(c);
 for (const c of Object.values(db.candidates)) for (const r of c.runs) if (r.status === 'running') { r.status = 'interrupted'; r.finishedAt = now(); }
 
 http.createServer((req, res) => {

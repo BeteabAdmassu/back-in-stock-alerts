@@ -7,3 +7,4 @@ data/
 harness/data/
 node_modules/
 .env
+grade.sh
