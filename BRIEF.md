@@ -36,7 +36,7 @@ WEBHOOK_SECRET
 Stack, host, database, design, copy, and the customer's experience after they hit submit.
 We care about the form, the admin page and the email looking like a real product, not a demo.
 
-## Send us
+## Send us (in your Upwork proposal)
 
 - **A GitHub repo with a working `Dockerfile`**: `docker build` + `docker run` with the env vars above, and nothing else, must bring it up on `$PORT`. (A public image URL such as `ghcr.io/...` also works.)
 - **A live URL** where it's already running from that same container
