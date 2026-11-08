@@ -15,9 +15,12 @@ const MAX_RETRY_AFTER_MS = 60 * 60 * 1000;
 /** The request may have reached the provider before this response was produced. */
 const AMBIGUOUS_STATUSES = new Set([408, 502, 504]);
 
-/** Statuses where a response refuses this attempt but a later one could succeed. */
+/**
+ * Statuses where a response refuses this attempt but a later one could succeed. 404 and 405 say the
+ * URL is wrong, not the message: a misconfigured base URL or a proxy blip, which an operator can fix.
+ */
 function isRetryableStatus(status: number): boolean {
-  return [401, 403, 408, 409, 425, 429].includes(status) || status >= 500;
+  return [401, 403, 404, 405, 408, 409, 425, 429].includes(status) || status >= 500;
 }
 
 /** Statuses where ARCHITECTURE.md says to honour Retry-After. 401 and 403 are operator problems. */

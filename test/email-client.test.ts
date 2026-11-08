@@ -140,8 +140,8 @@ test('408, 502 and 504 are retryable and ambiguous: the provider may have accept
   }
 });
 
-test('401, 403, 409, 425, 429 and other 5xx are retryable and not ambiguous', async (t) => {
-  for (const status of [401, 403, 409, 425, 429, 500, 503]) {
+test('401, 403, 404, 405, 409, 425, 429 and other 5xx are retryable and not ambiguous', async (t) => {
+  for (const status of [401, 403, 404, 405, 409, 425, 429, 500, 503]) {
     await t.test(String(status), async () => {
       const { baseUrl } = await serve(respond(status, { name: 'some_error', message: 'no' }));
       assert.deepEqual(await clientFor(baseUrl).send(MESSAGE, OPTS), {
@@ -154,7 +154,7 @@ test('401, 403, 409, 425, 429 and other 5xx are retryable and not ambiguous', as
 });
 
 test('other 4xx are rejected', async (t) => {
-  for (const status of [400, 404, 405, 410, 413, 422]) {
+  for (const status of [400, 410, 413, 422]) {
     await t.test(String(status), async () => {
       const { baseUrl } = await serve(respond(status, { name: 'validation_error' }));
       assert.deepEqual(await clientFor(baseUrl).send(MESSAGE, OPTS), {
