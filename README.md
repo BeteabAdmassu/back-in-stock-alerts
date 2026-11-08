@@ -132,6 +132,11 @@ seen, or 24 hours, whichever comes first.
 - **Login throttling behind a proxy.** Throttling is per client IP, and the app doesn't trust
   forwarded headers. Behind a proxy all visitors share an IP, so repeated bad guesses can briefly lock
   out password login. Existing sessions keep working.
+- **Embed theme.** The form follows the visitor's OS light or dark setting, so a dark-mode visitor
+  sees a dark card on a light store. There is no option yet to pin it to the store's theme.
+- **Default email has no link.** Without `PRODUCT_URL_TEMPLATE` the email has no "Shop now" button and
+  asks the customer to head back to the store. The stock API has no product URLs, and taking one from
+  the sign-up request would let anyone put a phishing link in an email.
 - **Node's `node:sqlite`** is newer than the established native drivers. It was chosen to avoid
   native builds, and it sits behind the `Store` interface if it ever needs replacing.
 
@@ -149,6 +154,9 @@ npm test    # unit and integration tests: real SQLite, real local HTTP servers, 
 `test/e2e/harness.e2e.mjs` runs scenarios against a running container and a real harness, including
 SIGKILL restarts. Set `APP_URL`, `DASHBOARD_URL`, `WEBHOOK_SECRET`, `ADMIN_PASSWORD` and
 `APP_CONTAINER`, plus `HARNESS_CONTAINER` to include the outage scenario.
+
+`test/e2e/browser.e2e.mjs` drives login, Retry, Sign out and the embed in real headless Chrome,
+including inside a cross-origin iframe.
 
 To run the test server yourself: `node harness/server.js`, or `docker build -t bis-harness harness`.
 The original harness notes:
