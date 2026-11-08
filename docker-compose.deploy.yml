@@ -1,0 +1,41 @@
+# Deployment behind an existing Traefik on the external `proxy` network. Publishes no host ports.
+# Secrets come from a server-only .env (see .env.example).
+#
+#   docker compose -f docker-compose.deploy.yml up -d --build
+
+name: back-in-stock
+
+services:
+  app:
+    build: .
+    image: back-in-stock-alerts
+    container_name: back-in-stock
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+    volumes:
+      - data:/data
+    networks:
+      - proxy
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.back-in-stock.rule=Host(`back-in-stock.b7labs.tech`)
+      - traefik.http.routers.back-in-stock.entrypoints=websecure
+      - traefik.http.routers.back-in-stock.tls.certresolver=cloudflare
+      - traefik.http.services.back-in-stock.loadbalancer.server.port=3000
+
+volumes:
+  data:
+
+networks:
+  proxy:
+    external: true
