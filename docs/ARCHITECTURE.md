@@ -106,7 +106,7 @@ write-ahead flag and the idempotency key.
 | 400, 404, 405, 422 and other 4xx not listed below | Will never succeed | `failed` |
 | 401, 403 | Probably a config problem an operator can fix | retry, definite refusal |
 | 409, 429 | Concurrent key use or rate limit | retry, definite refusal, honour `Retry-After` |
-| 5xx | Refused | retry, definite refusal |
+| 5xx | Refused | retry, definite refusal, honour `Retry-After` |
 | Timeout, connection error | May have been accepted | retry, `ambiguous_send` stays set |
 
 ## Security
