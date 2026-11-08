@@ -4,6 +4,9 @@ Customers ask to be emailed when a sold-out item returns. This service gives a s
 sign-up form, takes stock webhooks without trusting them, and emails each customer once. It also has a
 password-protected admin page showing every request and when it was notified.
 
+**Live:** <https://back-in-stock.b7labs.tech/embed> (admin at
+<https://back-in-stock.b7labs.tech/admin>, password protected)
+
 The challenge brief is in [BRIEF.md](BRIEF.md). The full design is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
