@@ -58,7 +58,8 @@ export function createApp(deps: AppDeps): FastifyInstance {
 
   const app = Fastify({
     logger: false,
-    trustProxy: false,
+    // Off unless configured: otherwise anyone could pick their own IP with X-Forwarded-For.
+    trustProxy: (_address, hop) => hop < config.trustProxyHops,
     bodyLimit: BODY_LIMIT_BYTES,
     requestTimeout: REQUEST_TIMEOUT_MS,
     // A URL that cannot be decoded never reaches a hook, so it needs the baseline headers here.
@@ -110,7 +111,7 @@ export function createApp(deps: AppDeps): FastifyInstance {
 
   healthRoutes(app, { store });
   embedRoutes(app, { stock, clock, logger, views });
-  requestRoutes(app, { store, wake });
+  requestRoutes(app, { store, clock, wake });
   webhookRoutes(app, { store, webhookSecret: config.webhookSecret, wake });
 
   // A plugin, so its form parser and security headers stay encapsulated under /admin.

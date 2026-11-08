@@ -89,25 +89,25 @@ export function originMatchesHost(origin: string, host: string | undefined): boo
   }
 }
 
-export interface LoginThrottle {
+export interface IpThrottle {
   isBlocked(ip: string): boolean;
   /** Seconds until a blocked address may try again. */
   retryAfterSeconds(ip: string): number;
-  recordFailure(ip: string): void;
+  record(ip: string): void;
   reset(ip: string): void;
 }
 
-export function createLoginThrottle(deps: {
+export function createIpThrottle(deps: {
   clock: Clock;
-  maxFailures: number;
+  limit: number;
   windowMs: number;
   maxEntries: number;
-}): LoginThrottle {
-  const { clock, maxFailures, windowMs, maxEntries } = deps;
+}): IpThrottle {
+  const { clock, limit, windowMs, maxEntries } = deps;
   // Map keeps insertion order, so the first key is always the oldest window.
-  const entries = new Map<string, { failures: number; resetAt: number }>();
+  const entries = new Map<string, { count: number; resetAt: number }>();
 
-  function live(ip: string): { failures: number; resetAt: number } | null {
+  function live(ip: string): { count: number; resetAt: number } | null {
     const entry = entries.get(ip);
     if (!entry) return null;
     if (entry.resetAt > clock().getTime()) return entry;
@@ -126,7 +126,7 @@ export function createLoginThrottle(deps: {
   return {
     isBlocked(ip) {
       const entry = live(ip);
-      return entry !== null && entry.failures >= maxFailures;
+      return entry !== null && entry.count >= limit;
     },
 
     retryAfterSeconds(ip) {
@@ -134,14 +134,14 @@ export function createLoginThrottle(deps: {
       return entry ? Math.max(1, Math.ceil((entry.resetAt - clock().getTime()) / 1000)) : 0;
     },
 
-    recordFailure(ip) {
+    record(ip) {
       const entry = live(ip);
       if (entry) {
-        entry.failures += 1;
+        entry.count += 1;
         return;
       }
       makeRoom();
-      entries.set(ip, { failures: 1, resetAt: clock().getTime() + windowMs });
+      entries.set(ip, { count: 1, resetAt: clock().getTime() + windowMs });
     },
 
     reset(ip) {

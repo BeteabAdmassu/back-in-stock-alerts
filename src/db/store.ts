@@ -113,6 +113,12 @@ function toEvent(raw: RawEvent): WebhookEventRow {
 /** How long a repeat request can wait for a sell-out before it is emailed anyway. */
 const REPEAT_SUPPRESSION_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * A reconciler re-check gives way to other checks for this long, then takes its turn by age. It is
+ * how a restock with no webhook gets found, so a busy queue must not be able to starve it.
+ */
+const BACKGROUND_MAX_WAIT_MS = 5 * 60 * 1000;
+
 const skuKeyOf = (sku: string): string => sku.trim().toUpperCase();
 const normaliseEmail = (email: string): string => email.trim().toLowerCase();
 const escapeLike = (text: string): string => text.replace(/[\\%_]/g, '\\$&');
@@ -134,10 +140,24 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
     SELECT * FROM requests
     WHERE email = ? AND sku_key = ? AND status IN ('open', 'queued', 'sending')
   `);
+  // A failed row that may have been delivered counts: a new request would use a new idempotency key.
   const selectLastNotified = db.prepare(`
-    SELECT MAX(notified_at) AS at FROM requests
-    WHERE email = ? AND sku_key = ? AND status = 'notified'
+    SELECT MAX(COALESCE(notified_at, updated_at)) AS at FROM requests
+    WHERE email = ? AND sku_key = ?
+      AND (status = 'notified' OR (status = 'failed' AND ambiguous_send = 1))
   `);
+  const selectLastSoldOut = db.prepare(
+    'SELECT last_sold_out_at AS at FROM sku_sellouts WHERE sku_key = ?',
+  );
+  const upsertSoldOut = db.prepare(`
+    INSERT INTO sku_sellouts (sku_key, last_sold_out_at) VALUES (?, ?)
+    ON CONFLICT (sku_key) DO UPDATE SET
+      last_sold_out_at = MAX(last_sold_out_at, excluded.last_sold_out_at)
+  `);
+  // Includes rows mid-send: if that send fails, its retry must not rely on the old verification.
+  const clearVerification = db.prepare(
+    "UPDATE requests SET verified_at = NULL WHERE sku_key = ? AND status IN ('queued', 'sending')",
+  );
   const selectOpenSpellings = db.prepare(
     "SELECT DISTINCT sku FROM requests WHERE sku_key = ? AND status = 'open' ORDER BY sku",
   );
@@ -152,7 +172,8 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       generation = generation + 1,
       due_at = excluded.due_at,
       attempts = 0,
-      last_error = NULL
+      last_error = NULL,
+      background = 0
   `);
   const insertEvent = db.prepare(`
     INSERT INTO webhook_events (event_id, sku, sku_key, quantity, received_at)
@@ -163,8 +184,8 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
     'SELECT * FROM webhook_events ORDER BY received_at DESC, rowid DESC LIMIT ?',
   );
   const insertMissingChecks = db.prepare(`
-    INSERT INTO stock_checks (sku_key, query_sku, generation, due_at, attempts)
-    SELECT sku_key, sku, 1, ?, 0
+    INSERT INTO stock_checks (sku_key, query_sku, generation, due_at, attempts, background)
+    SELECT sku_key, sku, 1, ?, 0, 1
     FROM (SELECT sku_key, sku, MAX(created_at) FROM requests WHERE status = 'open' GROUP BY sku_key)
     WHERE true
     ON CONFLICT (sku_key) DO NOTHING
@@ -174,7 +195,7 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
     WHERE sku_key IN (
       SELECT sku_key FROM stock_checks
       WHERE due_at <= ? AND (lease_until IS NULL OR lease_until <= ?)
-      ORDER BY due_at, sku_key
+      ORDER BY CASE WHEN background = 1 AND due_at > ? THEN 1 ELSE 0 END, due_at, sku_key
       LIMIT ?
     )
     RETURNING sku_key, query_sku, generation, attempts, lease_until
@@ -329,6 +350,19 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
     upsertCheck.run(skuKeyOf(trimmed), trimmed, now);
   }
 
+  const lastSoldOut = (skuKey: string): string | null =>
+    (selectLastSoldOut.get(skuKey) as { at: string } | undefined)?.at ?? null;
+
+  /**
+   * Ends suppression and makes queued rows verify again, but never queues anything: whether an email
+   * goes out is still decided by the stock API.
+   */
+  function noteSoldOut(skuKey: string, now: string): void {
+    upsertSoldOut.run(skuKey, now);
+    clearSuppression.run(skuKey);
+    clearVerification.run(skuKey);
+  }
+
   return {
     createRequest({ email, sku }) {
       const normalEmail = normaliseEmail(email);
@@ -337,9 +371,12 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       return transaction(db, () => {
         const now = nowIso();
         const last = selectLastNotified.get(normalEmail, skuKey) as { at: string | null };
-        const suppressUntil = last.at
-          ? new Date(Date.parse(last.at) + REPEAT_SUPPRESSION_MS).toISOString()
-          : null;
+        const soldOut = lastSoldOut(skuKey);
+        // A sell-out since the last email means any stock now is a new restock, so nothing to hold.
+        const suppressUntil =
+          last.at !== null && (soldOut === null || soldOut <= last.at)
+            ? new Date(Date.parse(last.at) + REPEAT_SUPPRESSION_MS).toISOString()
+            : null;
         const inserted = insertRequest.get(
           randomUUID(),
           normalEmail,
@@ -357,6 +394,11 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
         if (!existing) throw new Error('Open request conflict without an open request');
         return { request: toRequest(existing as unknown as RawRequest), created: false };
       });
+    },
+
+    findOpenRequest({ email, sku }) {
+      const raw = selectOpenRequest.get(normaliseEmail(email), skuKeyOf(sku));
+      return raw ? toRequest(raw as unknown as RawRequest) : null;
     },
 
     getRequest(id) {
@@ -413,6 +455,7 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
           now,
         );
         if (Number(changes) === 0) return { inserted: false };
+        if (quantity === 0) noteSoldOut(skuKeyOf(trimmedSku), now);
         enqueueCheck(trimmedSku, now);
         return { inserted: true };
       });
@@ -435,7 +478,14 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       if (limit <= 0) return [];
       const now = clock();
       const claimedAt = now.toISOString();
-      const rows = claimChecks.all(leaseFrom(now.getTime()), claimedAt, claimedAt, limit);
+      const backgroundCutoff = new Date(now.getTime() - BACKGROUND_MAX_WAIT_MS).toISOString();
+      const rows = claimChecks.all(
+        leaseFrom(now.getTime()),
+        claimedAt,
+        claimedAt,
+        backgroundCutoff,
+        limit,
+      );
       return (rows as unknown as RawCheck[]).map((row) => ({
         skuKey: row.sku_key,
         querySku: row.query_sku,
@@ -463,15 +513,27 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
         if (!held) return { queued: 0 };
 
         const now = nowIso();
+        const soldOut = lastSoldOut(claim.skuKey);
+        // This read began before a sell-out we now know about, so it says nothing about stock today.
+        // A sell-out webhook also moves the generation, which is what makes the check run again, so
+        // requiring it means this can never drop a check with nobody promoted.
+        const overtaken =
+          outcome.kind === 'in_stock' &&
+          held.generation !== claim.generation &&
+          soldOut !== null &&
+          soldOut >= claim.claimedAt;
         let queued = 0;
-        if (outcome.kind === 'in_stock') {
+        if (outcome.kind === 'in_stock' && !overtaken) {
           const productJson = outcome.product === null ? null : JSON.stringify(outcome.product);
           queued = Number(promoteOpen.run(now, now, now, productJson, claim.skuKey, now).changes);
         } else if (outcome.kind === 'out_of_stock') {
-          clearSuppression.run(claim.skuKey);
+          // Dated when the read began: it may have taken long enough for an email to go out since.
+          noteSoldOut(claim.skuKey, claim.claimedAt);
         }
-        const verifiedQuantity = outcome.kind === 'skipped' ? null : outcome.quantity;
-        settleEvents.run(outcome.kind, now, verifiedQuantity, claim.skuKey, claim.claimedAt);
+        if (!overtaken) {
+          const verifiedQuantity = outcome.kind === 'skipped' ? null : outcome.quantity;
+          settleEvents.run(outcome.kind, now, verifiedQuantity, claim.skuKey, claim.claimedAt);
+        }
 
         if (held.generation === claim.generation) deleteCheck.run(claim.skuKey);
         else releaseCheckNow.run(now, claim.skuKey);

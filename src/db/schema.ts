@@ -67,4 +67,16 @@ export const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX stock_checks_due ON stock_checks (due_at);
   `,
+  `
+  -- When each SKU was last known to be sold out, kept even with no request waiting: a repeat request
+  -- must be able to tell whether the item sold out since the customer was last emailed.
+  CREATE TABLE sku_sellouts (
+    sku_key          TEXT PRIMARY KEY,
+    last_sold_out_at TEXT NOT NULL
+  ) STRICT;
+
+  -- 1 for a reconciler re-check. These run after anything a customer or webhook is waiting on.
+  ALTER TABLE stock_checks
+    ADD COLUMN background INTEGER NOT NULL DEFAULT 0 CHECK (background IN (0, 1));
+  `,
 ];

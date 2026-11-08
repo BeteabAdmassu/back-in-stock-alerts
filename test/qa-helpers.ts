@@ -169,6 +169,7 @@ export async function stack(
       emailFrom: 'x@example.com',
       productUrlTemplate: null,
       logLevel: 'silent',
+      trustProxyHops: 0,
       timings,
     },
     store,

@@ -189,8 +189,10 @@ const scenarios = {
     await setStock(s, 0);
     await postRequest(mail('s4', 'a'), s);
     await sleep(2000);
-    await setStock(s, 5);
+    // Arm the failures first: once stock is up, a check already in flight can send the email, and
+    // the failures would then land on the next scenario's email.
     await failNext(2);
+    await setStock(s, 5);
     await postWebhook({ event_id: `evt_${run}_s4`, sku: s, quantity: 5 });
     await expectOneEach(`qa-${run}-s4-`, 1, 60_000);
     const rows = await inbox(`qa-${run}-s4-`);
@@ -291,6 +293,45 @@ const scenarios = {
       'email after the real restock is missing',
     );
     return 'repeat POST while in stock: no email; after sell-out and restock: exactly one more';
+  },
+  async s12_restock_while_nobody_waiting_then_ask_again() {
+    const s = sku('s12');
+    await setStock(s, 3);
+    await postRequest(mail('s12', 'a'), s);
+    await expectOneEach(`qa-${run}-s12-`, 1, 20_000);
+    // Sold out and back with no request open, so no stock check ever reads the sell-out.
+    await setStock(s, 0);
+    await postWebhook({ event_id: `evt_${run}_s12a`, sku: s, quantity: 0 });
+    await setStock(s, 3);
+    await postWebhook({ event_id: `evt_${run}_s12b`, sku: s, quantity: 3 });
+    await sleep(2000);
+    await postRequest(mail('s12', 'a'), s);
+    check(
+      await until(async () => accepted(await inbox(`qa-${run}-s12-`)).length === 2, 20_000),
+      'no email for a new restock: the unseen sell-out left the customer suppressed',
+    );
+    return 'sell-out nobody read, then asking again: exactly one more email';
+  },
+  async s13_sold_out_and_back_straight_after_asking_again() {
+    const s = sku('s13');
+    await setStock(s, 3);
+    await postRequest(mail('s13', 'a'), s);
+    await expectOneEach(`qa-${run}-s13-`, 1, 20_000);
+    await postRequest(mail('s13', 'a'), s);
+    // The sell-out and restock are quicker than a stock check, which only ever reads in stock.
+    await Promise.all([
+      setStock(s, 0),
+      postWebhook({ event_id: `evt_${run}_s13a`, sku: s, quantity: 0 }),
+    ]);
+    await setStock(s, 3);
+    await postWebhook({ event_id: `evt_${run}_s13b`, sku: s, quantity: 3 });
+    check(
+      await until(async () => accepted(await inbox(`qa-${run}-s13-`)).length === 2, 20_000),
+      'no email for a new restock after a fast sell-out',
+    );
+    await sleep(5000);
+    check(accepted(await inbox(`qa-${run}-s13-`)).length === 2, 'a third email was sent');
+    return 'fast sell-out and restock after asking again: exactly one more email';
   },
   async s10_stock_and_email_api_outage() {
     if (!HARNESS_CONTAINER) return 'SKIP';

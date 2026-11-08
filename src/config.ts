@@ -57,6 +57,11 @@ export function loadConfig(env: Env = process.env): AppConfig {
     invalid.push('PRODUCT_URL_TEMPLATE must be an http(s) URL containing {sku}');
   }
 
+  const trustProxy = read('TRUST_PROXY');
+  if (trustProxy !== '' && !/^\d$/.test(trustProxy)) {
+    invalid.push('TRUST_PROXY must be a number of proxy hops from 0 to 9');
+  }
+
   if (missing.length > 0 || invalid.length > 0) {
     const problems = [...invalid];
     if (missing.length > 0) {
@@ -77,6 +82,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     emailFrom: read('EMAIL_FROM') || DEFAULT_EMAIL_FROM,
     productUrlTemplate: productUrlTemplate || null,
     logLevel: read('LOG_LEVEL') || DEFAULT_LOG_LEVEL,
+    trustProxyHops: Number(trustProxy),
     timings: DEFAULT_TIMINGS,
   };
 }

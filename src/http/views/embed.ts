@@ -211,7 +211,7 @@ const SCRIPT = `
     doneTitle.textContent = data.duplicate ? "You're already on the list" : "You're on the list";
     doneEmail.textContent = typeof data.email === 'string' ? data.email : typedEmail;
     doneNote.textContent = item && item.available
-      ? "It's in stock now, so expect one email shortly. No marketing."
+      ? "It's in stock now, so expect an email shortly, unless we've just sent you one. No marketing."
       : "We'll send one email when it's back. No marketing.";
     done.hidden = false;
     doneTitle.focus();
@@ -248,7 +248,7 @@ const SCRIPT = `
         succeed(data, emailValue);
         return;
       }
-      var problem = res.status === 400 && data && data.error ? data.error : null;
+      var problem = (res.status === 400 || res.status === 429) && data && data.error ? data.error : null;
       if (problem && (problem.field === 'email' || problem.field === 'sku')) {
         var input = problem.field === 'email' ? email : sku;
         setBusy(false);

@@ -4,7 +4,7 @@ import {
   basicPassword,
   clearedSessionCookie,
   createAdminAuth,
-  createLoginThrottle,
+  createIpThrottle,
   isForwardedHttps,
   originMatchesHost,
   sessionCookie,
@@ -37,9 +37,9 @@ export function adminRoutes(
 ): void {
   const { password, store, clock, views } = deps;
   const auth = createAdminAuth({ password, clock });
-  const throttle = createLoginThrottle({
+  const throttle = createIpThrottle({
     clock,
-    maxFailures: 10,
+    limit: 10,
     windowMs: 5 * 60 * 1000,
     maxEntries: 10_000,
   });
@@ -91,7 +91,7 @@ export function adminRoutes(
     // Basic shares the throttle, or it would be a way around the limit on the login form.
     if (throttle.isBlocked(request.ip)) return sendThrottled(request, reply);
     if (auth.checkPassword(candidate)) return;
-    throttle.recordFailure(request.ip);
+    throttle.record(request.ip);
     return sendUnauthenticated(request, reply);
   };
 
@@ -164,7 +164,7 @@ export function adminRoutes(
     if (throttle.isBlocked(request.ip)) return sendThrottled(request, reply);
     const candidate = request.body instanceof URLSearchParams ? request.body.get('password') : null;
     if (candidate === null || !auth.checkPassword(candidate)) {
-      throttle.recordFailure(request.ip);
+      throttle.record(request.ip);
       return sendLogin(request, reply, 401, 'That password is not correct.');
     }
     throttle.reset(request.ip);

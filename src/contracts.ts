@@ -40,6 +40,8 @@ export interface AppConfig {
   /** Optional, e.g. https://shop.example/p/{sku}. Without it the email has no shop button. */
   productUrlTemplate: string | null;
   logLevel: string;
+  /** Reverse proxies in front of the app whose forwarded client IP to believe. 0 trusts none. */
+  trustProxyHops: number;
   timings: Timings;
 }
 
@@ -145,17 +147,21 @@ export interface Store {
    * Inserts an open request, or returns the existing open one for (email, skuKey) with
    * created=false. On insert, atomically enqueues a stock check for the SKU, so an item that is
    * already in stock (or restocked moments ago) still produces an email. A repeat request within
-   * 24h of the customer's last notification for the SKU waits for a sell-out to be observed (or
-   * those 24h to pass), so repeating a POST cannot send a second email for the same restock.
+   * 24h of the customer's last notification for the SKU, with no sell-out known since, waits for a
+   * sell-out (or those 24h to pass), so repeating a POST cannot send a second email for the same
+   * restock. A failed send that may have been delivered counts as a notification here.
    */
   createRequest(input: { email: string; sku: string }): { request: RequestRow; created: boolean };
+  /** The open request for this customer and SKU, without creating one. */
+  findOpenRequest(input: { email: string; sku: string }): RequestRow | null;
   getRequest(id: string): RequestRow | null;
   listRequests(filter: RequestFilter): { rows: RequestRow[]; total: number };
   statusCounts(): Record<RequestStatus, number>;
 
   /**
    * Inserts the event and enqueues its stock check atomically. inserted=false means the event_id
-   * was already recorded, by a retry or a simultaneous delivery; nothing else changes.
+   * was already recorded, by a retry or a simultaneous delivery; nothing else changes. quantity=0
+   * also records a sell-out, which can end suppression but can never queue an email by itself.
    */
   recordWebhookEvent(input: { eventId: string; sku: string; quantity: number }): {
     inserted: boolean;
@@ -173,10 +179,11 @@ export interface Store {
   openSkuSpellings(skuKey: string): string[];
   /**
    * Atomically: if in stock, moves the SKU's open requests to queued unless suppressed, snapshotting
-   * the product (only where attempts = 0, so a retried payload never changes); if out of stock,
-   * lifts suppression; marks pending events received
-   * up to claim.claimedAt with the outcome; deletes the check unless its generation moved on, in
-   * which case it is released and due now. Returns the number of requests queued.
+   * the product (only where attempts = 0, so a retried payload never changes), and does nothing if
+   * a sell-out was recorded after the claim, since the read is then stale; if out of stock, records
+   * a sell-out; marks pending events received up to claim.claimedAt with the outcome; deletes the
+   * check unless its generation moved on, in which case it is released and due now. Returns the
+   * number of requests queued.
    */
   completeStockCheck(claim: StockCheckClaim, outcome: StockCheckOutcome): { queued: number };
   /** Releases the claim and schedules the retry. */

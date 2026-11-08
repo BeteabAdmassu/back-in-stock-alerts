@@ -93,7 +93,10 @@ test('openDatabase creates parent directories, sets pragmas and migrates once', 
   db.close();
 
   const reopened = openDatabase(path);
-  assert.equal(Object.values(reopened.prepare('PRAGMA user_version').get() ?? {})[0], 1);
+  assert.equal(
+    Object.values(reopened.prepare('PRAGMA user_version').get() ?? {})[0],
+    MIGRATIONS.length,
+  );
   reopened.close();
 });
 
@@ -271,12 +274,12 @@ test('a failed enqueue rolls back the event, so a retried webhook is not lost', 
 
 test('completing marks only events received up to claimedAt, with the verified quantity', () => {
   const { store, advance } = setup();
-  store.recordWebhookEvent({ eventId: 'before', sku: 'S', quantity: 0 });
+  store.recordWebhookEvent({ eventId: 'before', sku: 'S', quantity: 3 });
   const [claim] = store.claimDueStockChecks(1);
   assert.ok(claim);
   advance(1000);
-  store.recordWebhookEvent({ eventId: 'during', sku: 'S', quantity: 0 });
-  store.recordWebhookEvent({ eventId: 'other-sku', sku: 'T', quantity: 0 });
+  store.recordWebhookEvent({ eventId: 'during', sku: 'S', quantity: 3 });
+  store.recordWebhookEvent({ eventId: 'other-sku', sku: 'T', quantity: 3 });
   store.completeStockCheck(claim, { kind: 'in_stock', quantity: 7, product: null });
 
   const byId = new Map(store.listRecentWebhookEvents(10).map((e) => [e.eventId, e]));

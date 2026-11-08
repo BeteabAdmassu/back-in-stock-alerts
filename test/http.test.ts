@@ -12,7 +12,7 @@ import {
 import { openDatabase } from '../src/db/database.ts';
 import { createStore } from '../src/db/store.ts';
 import { createApp } from '../src/http/app.ts';
-import { createLoginThrottle } from '../src/http/auth.ts';
+import { createIpThrottle } from '../src/http/auth.ts';
 import { createCatalogueCache } from '../src/http/routes/embed.ts';
 
 const WEBHOOK_SECRET = 'webhook-secret-value';
@@ -38,6 +38,7 @@ const CONFIG: AppConfig = {
   emailFrom: 'from@example.com',
   productUrlTemplate: null,
   logLevel: 'info',
+  trustProxyHops: 0,
   timings: DEFAULT_TIMINGS,
 };
 
@@ -902,18 +903,18 @@ test('admin: Basic guesses share the throttle, but a valid session still works',
 
 test('throttle: the map stays bounded and evicts the oldest entry', () => {
   let now = START;
-  const throttle = createLoginThrottle({
+  const throttle = createIpThrottle({
     clock: () => new Date(now),
-    maxFailures: 1,
+    limit: 1,
     windowMs: 1000,
     maxEntries: 3,
   });
-  for (const ip of ['a', 'b', 'c', 'd']) throttle.recordFailure(ip);
+  for (const ip of ['a', 'b', 'c', 'd']) throttle.record(ip);
   assert.equal(throttle.isBlocked('a'), false, 'oldest evicted');
   for (const ip of ['b', 'c', 'd']) assert.equal(throttle.isBlocked(ip), true);
   now += 1000;
   for (const ip of ['b', 'c', 'd']) assert.equal(throttle.isBlocked(ip), false, 'window over');
-  throttle.recordFailure('e');
+  throttle.record('e');
   assert.equal(throttle.isBlocked('e'), true);
 });
 

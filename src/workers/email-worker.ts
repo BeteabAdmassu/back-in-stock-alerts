@@ -65,6 +65,16 @@ export function createEmailWorker(options: EmailWorkerOptions): Worker {
     }
 
     if (result.kind === 'error') {
+      if (row.verifiedAt === null) {
+        // A sell-out was reported since the last verification, so wait to hear from the stock API.
+        store.markEmailRetry(row.id, {
+          error: 'Waiting to verify stock after a sell-out',
+          nextAttemptAt: new Date(clock().getTime() + emailBackoffMs(row.attempts + 1)),
+          ambiguous: false,
+        });
+        log(row.id, 'reverify_required');
+        return false;
+      }
       // Verified earlier, and a stock outage must not block delivery.
       log(row.id, 'reverify_unavailable');
       return true;

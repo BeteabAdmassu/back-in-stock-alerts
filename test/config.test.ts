@@ -36,8 +36,14 @@ test('applies defaults and trims trailing slashes', () => {
     emailFrom: 'Back in Stock <onboarding@resend.dev>',
     productUrlTemplate: null,
     logLevel: 'info',
+    trustProxyHops: 0,
     timings: DEFAULT_TIMINGS,
   });
+});
+
+test('TRUST_PROXY is a small hop count', () => {
+  assert.equal(loadConfig({ ...VALID, TRUST_PROXY: '1' }).trustProxyHops, 1);
+  assert.throws(() => loadConfig({ ...VALID, TRUST_PROXY: 'true' }), /TRUST_PROXY/);
 });
 
 test('reads every optional variable', () => {
