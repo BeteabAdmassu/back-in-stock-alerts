@@ -144,7 +144,7 @@ function assertAdminHeaders(headers: Record<string, unknown>): void {
   assert.equal(headers['x-content-type-options'], 'nosniff');
   // Not no-referrer: that makes browsers send `Origin: null` on form POSTs, which are then refused.
   assert.equal(headers['referrer-policy'], 'same-origin');
-  assert.equal(headers['cache-control'], 'no-store');
+  assert.equal(headers['cache-control'], 'no-store, no-transform');
   assert.equal(headers['x-frame-options'], 'DENY');
   const csp = String(headers['content-security-policy']);
   assert.match(csp, /frame-ancestors 'none'/);

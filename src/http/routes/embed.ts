@@ -86,6 +86,7 @@ export function embedRoutes(
     const nonce = newNonce();
     return reply
       .header('Content-Security-Policy', embedCsp(nonce))
+      .header('Cache-Control', 'no-transform') // A CDN's injected scripts would break under the CSP.
       .type(HTML_TYPE)
       .send(views.renderEmbed({ sku, product: productFor(sku, catalogue), catalogue, nonce }));
   });

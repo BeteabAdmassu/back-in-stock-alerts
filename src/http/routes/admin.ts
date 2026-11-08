@@ -109,7 +109,7 @@ export function adminRoutes(
     const nonce = newNonce();
     nonces.set(request, nonce);
     reply
-      .header('Cache-Control', 'no-store')
+      .header('Cache-Control', 'no-store, no-transform') // Proxies must not rewrite these pages.
       .header('Content-Security-Policy', adminCsp(nonce))
       .header('X-Frame-Options', 'DENY')
       // With no-referrer, browsers send `Origin: null` on form POSTs, which the check below rejects.

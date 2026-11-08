@@ -74,7 +74,7 @@ test('QA-A4 login sets an HttpOnly SameSite cookie that opens the page', async (
   assert.match(cookie, /SameSite=Strict/);
   const page = await fetch(`${s.url}/admin`, { headers: { cookie: cookie.split(';')[0] ?? '' } });
   assert.equal(page.status, 200);
-  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('cache-control'), 'no-store, no-transform');
 });
 
 test('QA-A6 the admin retry button works as a browser sends it, and the row is then delivered', async (t) => {
