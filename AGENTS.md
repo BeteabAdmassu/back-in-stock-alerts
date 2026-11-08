@@ -28,7 +28,8 @@ every guarantee. Read both before changing behaviour. `src/contracts.ts` is the 
 
 ## Rules that protect the guarantees
 
-- Never treat a failed stock call as "out of stock", or use the webhook `quantity` in a decision.
+- Never treat a failed stock call as "out of stock", or let the webhook `quantity` cause an email.
+  Its only effect is that `quantity: 0` records a sell-out. Only a stock API read can queue an email.
 - Never send an email without the stable idempotency key, or change a payload once attempted.
 - Never add a critical state that lives only in memory. Caches are fine for the catalogue.
 - Never log emails, secrets, tokens or query strings.

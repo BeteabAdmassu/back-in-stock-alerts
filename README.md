@@ -41,6 +41,7 @@ is replaced, add a named volume: `-v back-in-stock-data:/data`.
 | `EMAIL_FROM` | no | Sender, default `Back in Stock <onboarding@resend.dev>` |
 | `PRODUCT_URL_TEMPLATE` | no | e.g. `https://shop.example/p/{sku}`. Adds a "Shop now" button to the email |
 | `LOG_LEVEL` | no | Default `info` |
+| `TRUST_PROXY` | no | Number of reverse proxies in front of the app, so throttles see real client IPs. Default 0 |
 
 ### Local development
 
@@ -58,7 +59,7 @@ npm run check           # typecheck, lint, tests
 | Route | Purpose |
 | --- | --- |
 | `GET /embed` | The form, safe to frame anywhere. `?sku=ABC-1` fixes the SKU and shows the product |
-| `POST /api/requests` | `{ email, sku }`. 201 when created, 200 with `duplicate: true` if already open, 400 if invalid |
+| `POST /api/requests` | `{ email, sku }`. 201 when created, 200 with `duplicate: true` if already open, 400 if invalid, 429 past 600 new requests a minute from one IP |
 | `POST /webhooks/stock` | `{ event_id, sku, quantity }` with `X-Webhook-Secret`. 200 once durably stored, 401 for a bad secret, 400 for a bad payload |
 | `GET /admin` | Requests, status, notified time, search, filters and recent webhooks. Log in on the page, or use HTTP Basic with any username |
 | `GET /healthz` | Liveness and database check |
@@ -104,15 +105,17 @@ stock and email APIs, and all their state is in the database.
   restock.
 
 **Not misled**
-- The webhook's `quantity` is never used in a decision. Only the stock API is believed, so a phantom
+- A webhook's `quantity` can never cause an email. Only the stock API is believed, so a phantom
   restock sends nothing.
-- Stock is re-checked before sending if the last check is over 60 seconds old. If the item sold out
-  and no earlier attempt could have been delivered, the request goes back to waiting for the next
-  restock.
+- Stock is re-checked before sending if the last check is over 60 seconds old, or a sell-out has been
+  reported since. If the item sold out and no earlier attempt could have been delivered, the request
+  goes back to waiting for the next restock.
 
 After a request is notified, the customer can ask again for the next restock. Repeating the request
 while the item is still in stock sends nothing further: the new request waits until a sell-out is
-seen, or 24 hours, whichever comes first.
+known, or 24 hours, whichever comes first. Sell-outs are recorded per SKU even with nobody waiting,
+from an out-of-stock read or a `quantity: 0` webhook, so someone asking again after a new restock is
+emailed straight away.
 
 ## Known limitations
 
@@ -124,17 +127,31 @@ seen, or 24 hours, whichever comes first.
   tracked, as the brief's API has no webhook for them.
 - **Very long outages.** If email keeps failing for 23 hours the request becomes `failed`. Admin can
   retry it, which could duplicate if an earlier attempt was secretly delivered; the page warns when
-  that is possible.
+  that is possible. If the customer asks again after such a failure, the new request waits for a
+  sell-out or 24 hours, since the first email may have arrived.
+- **A false `quantity: 0` webhook.** It can't send anything to someone waiting for the first time. But
+  if a customer already emailed asks again while the item is in stock, a false or late sell-out from
+  a sender with the secret leads to a second email. The alternative was missing real restocks.
 - **Changing config during a retry.** Altering `EMAIL_FROM` or `PRODUCT_URL_TEMPLATE`, or deploying a
   new template while a send is being retried, changes the payload under the same key, which a
   provider may refuse.
 - **Everyone waiting is notified.** A restock of 3 units still emails all 50 people waiting.
-- **Sign-up abuse.** `POST /api/requests` has no rate limit or confirmation step, so someone could
-  sign up another person's address. The harm is limited to one email per address, per product, per
-  restock or per 24 hours.
-- **Login throttling behind a proxy.** Throttling is per client IP, and the app doesn't trust
-  forwarded headers. Behind a proxy all visitors share an IP, so repeated bad guesses can briefly lock
-  out password login. Existing sessions keep working.
+- **Sign-up abuse.** New requests are limited to 600 a minute per IP, and there is no confirmation
+  step, so someone could sign up another person's address, or use many IPs. Harm to the address is
+  limited to one email per product, per restock or per 24 hours. Requests for SKUs that never restock
+  stay open and get re-checked every minute; these re-checks run behind real customers' checks, but a
+  sustained flood would slow the catch-up for missed webhooks and load the stock API.
+- **Set `TRUST_PROXY` behind a proxy.** Throttles work per client IP, and forwarded headers are only
+  believed when it is set. Without it all visitors share the proxy's IP, so anyone's repeated bad
+  guesses can lock everyone out of password login, for as long as they keep guessing. Existing
+  sessions keep working.
+- **Sign-out doesn't revoke the session.** Sessions are signed, stateless cookies, so a cookie copied
+  before signing out stays valid until it expires, up to 12 hours later.
+- **A duplicate request reveals that someone is waiting.** `POST /api/requests` tells an anonymous
+  caller an address already has an open request for that SKU. The form needs this to say "You're
+  already on the list", so it is a deliberate trade-off.
+- **A sell-out nobody reports.** If an item sells out with no request open and no `quantity: 0`
+  webhook, nothing records it, so a customer asking again after the restock waits up to 24 hours.
 - **Embed theme.** The form follows the visitor's OS light or dark setting, so a dark-mode visitor
   sees a dark card on a light store. There is no option yet to pin it to the store's theme.
 - **Default email has no link.** Without `PRODUCT_URL_TEMPLATE` the email has no "Shop now" button and
