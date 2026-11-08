@@ -127,8 +127,21 @@ test('2xx is accepted, whatever the state of the body', async (t) => {
   });
 });
 
-test('401, 403, 409, 429 and 5xx are retryable and not ambiguous', async (t) => {
-  for (const status of [401, 403, 409, 429, 500, 502, 503, 504]) {
+test('408, 502 and 504 are retryable and ambiguous: the provider may have accepted', async (t) => {
+  for (const status of [408, 502, 504]) {
+    await t.test(String(status), async () => {
+      const { baseUrl } = await serve(respond(status, { name: 'some_error', message: 'no' }));
+      assert.deepEqual(await clientFor(baseUrl).send(MESSAGE, OPTS), {
+        kind: 'retryable',
+        ambiguous: true,
+        error: `HTTP ${status} some_error`,
+      });
+    });
+  }
+});
+
+test('401, 403, 409, 425, 429 and other 5xx are retryable and not ambiguous', async (t) => {
+  for (const status of [401, 403, 409, 425, 429, 500, 503]) {
     await t.test(String(status), async () => {
       const { baseUrl } = await serve(respond(status, { name: 'some_error', message: 'no' }));
       assert.deepEqual(await clientFor(baseUrl).send(MESSAGE, OPTS), {
@@ -241,7 +254,7 @@ test('Retry-After in seconds or as a date is honoured on 429 and 5xx', async (t)
     const { baseUrl } = await serve(respond(429, {}, { 'retry-after': '9'.repeat(30) }));
     const result = await clientFor(baseUrl).send(MESSAGE, OPTS);
     assert.ok(result.kind === 'retryable');
-    assert.equal(result.retryAfterMs, 24 * 60 * 60 * 1000);
+    assert.equal(result.retryAfterMs, 60 * 60 * 1000);
   });
 });
 

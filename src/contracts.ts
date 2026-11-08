@@ -8,7 +8,7 @@ export interface Timings {
   pollIntervalMs: number;
   /** How often open SKUs are re-checked, to catch webhooks that never arrived. */
   reconcileIntervalMs: number;
-  /** A claimed row is considered abandoned after this. Must exceed httpTimeoutMs. */
+  /** A claimed row is considered abandoned after this. Must exceed twice httpTimeoutMs. */
   leaseMs: number;
   /** Per-request timeout for the stock and email APIs. */
   httpTimeoutMs: number;
@@ -144,7 +144,9 @@ export interface Store {
   /**
    * Inserts an open request, or returns the existing open one for (email, skuKey) with
    * created=false. On insert, atomically enqueues a stock check for the SKU, so an item that is
-   * already in stock (or restocked moments ago) still produces an email.
+   * already in stock (or restocked moments ago) still produces an email. A repeat request within
+   * 24h of the customer's last notification for the SKU waits for a sell-out to be observed (or
+   * those 24h to pass), so repeating a POST cannot send a second email for the same restock.
    */
   createRequest(input: { email: string; sku: string }): { request: RequestRow; created: boolean };
   getRequest(id: string): RequestRow | null;
@@ -167,9 +169,12 @@ export interface Store {
   /** Claims due, unleased checks under a lease. */
   claimDueStockChecks(limit: number): StockCheckClaim[];
   hasOpenRequests(skuKey: string): boolean;
+  /** Each spelling among open requests: a stock API may treat SKU case as significant. */
+  openSkuSpellings(skuKey: string): string[];
   /**
-   * Atomically: if in stock, moves the SKU's open requests to queued, snapshotting the product
-   * (only where attempts = 0, so a retried payload never changes); marks pending events received
+   * Atomically: if in stock, moves the SKU's open requests to queued unless suppressed, snapshotting
+   * the product (only where attempts = 0, so a retried payload never changes); if out of stock,
+   * lifts suppression; marks pending events received
    * up to claim.claimedAt with the outcome; deletes the check unless its generation moved on, in
    * which case it is released and due now. Returns the number of requests queued.
    */
@@ -209,7 +214,7 @@ export interface Store {
    * nothing. Returns false (changing nothing) if the row may already have been delivered.
    */
   holdForStock(id: string): boolean;
-  /** Admin action: failed back to queued, attempts reset. Returns false if not failed. */
+  /** Admin action: failed back to queued, attempts reset, ambiguous_send kept. False if not failed. */
   retryFailed(id: string): boolean;
 
   /**

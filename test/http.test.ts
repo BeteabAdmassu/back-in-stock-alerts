@@ -141,7 +141,9 @@ function assertBaseline(headers: Record<string, unknown>): void {
 }
 
 function assertAdminHeaders(headers: Record<string, unknown>): void {
-  assertBaseline(headers);
+  assert.equal(headers['x-content-type-options'], 'nosniff');
+  // Not no-referrer: that makes browsers send `Origin: null` on form POSTs, which are then refused.
+  assert.equal(headers['referrer-policy'], 'same-origin');
   assert.equal(headers['cache-control'], 'no-store');
   assert.equal(headers['x-frame-options'], 'DENY');
   const csp = String(headers['content-security-policy']);
@@ -259,7 +261,7 @@ test('embed: framable by anyone, nonce CSP, no cookie', async (t) => {
   assert.ok(nonce);
   assert.equal(
     first.headers['content-security-policy'],
-    `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; img-src https: data:; form-action 'self'; base-uri 'none'; frame-ancestors *`,
+    `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; img-src https: data:; form-action 'self'; base-uri 'none'`,
   );
   assert.ok(first.body.includes(`"nonce":"${nonce}"`));
   assert.notEqual(

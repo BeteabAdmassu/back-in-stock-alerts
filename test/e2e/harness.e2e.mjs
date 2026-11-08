@@ -23,8 +23,19 @@ const run = randomBytes(3).toString('hex');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 
+/** Harness control calls are idempotent, so this script's own network blips shouldn't fail a run. */
+async function dashboardFetch(url, init) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      if (attempt >= 5) throw e;
+      await sleep(1000);
+    }
+  }
+}
 const form = (path, body) =>
-  fetch(DASHBOARD_URL + path, {
+  dashboardFetch(DASHBOARD_URL + path, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(body),
@@ -57,7 +68,7 @@ const adminSearch = async (q) => {
 
 /** Rows of the harness inbox for this run: { to, subject, status }. */
 async function inbox(prefix) {
-  const html = await (await fetch(DASHBOARD_URL)).text();
+  const html = await (await dashboardFetch(DASHBOARD_URL)).text();
   const section = html.split('Inbox (emails your app sent)')[1]?.split('Webhooks sent')[0] ?? '';
   const rows = [
     ...section.matchAll(/<tr><td>[^<]*<\/td><td>([^<]*)<\/td><td>([^<]*)<\/td><td>([^<]*)<\/td>/g),
@@ -261,8 +272,28 @@ const scenarios = {
     );
     return 'second restock cycle gives exactly one more email';
   },
+  async s11_repeat_request_while_in_stock() {
+    const s = sku('s11');
+    await setStock(s, 3);
+    await postRequest(mail('s11', 'a'), s);
+    await expectOneEach(`qa-${run}-s11-`, 1, 20_000);
+    const again = await postRequest(mail('s11', 'a'), s);
+    check(again.status === 201, `repeat request gave ${again.status}`);
+    await sleep(8000);
+    check(accepted(await inbox(`qa-${run}-s11-`)).length === 1, 'repeat POST sent a second email');
+    await setStock(s, 0);
+    await postWebhook({ event_id: `evt_${run}_s11a`, sku: s, quantity: 0 });
+    await sleep(3000);
+    await setStock(s, 3);
+    await postWebhook({ event_id: `evt_${run}_s11b`, sku: s, quantity: 3 });
+    check(
+      await until(async () => accepted(await inbox(`qa-${run}-s11-`)).length === 2, 20_000),
+      'email after the real restock is missing',
+    );
+    return 'repeat POST while in stock: no email; after sell-out and restock: exactly one more';
+  },
   async s10_stock_and_email_api_outage() {
-    if (!HARNESS_CONTAINER) return 'SKIPPED: needs a local harness container';
+    if (!HARNESS_CONTAINER) return 'SKIP';
     const s = sku('s10');
     await setStock(s, 0);
     await postRequest(mail('s10', 'a'), s);
@@ -295,11 +326,17 @@ for (const [name, fn] of Object.entries(scenarios)) {
   const t0 = Date.now();
   try {
     const detail = await fn();
+    if (detail === 'SKIP') {
+      console.log(`SKIP ${name}: needs a local harness container`);
+      continue;
+    }
     results.push(true);
     console.log(`PASS ${name} (${Math.round((Date.now() - t0) / 1000)}s): ${detail}`);
   } catch (e) {
     results.push(false);
-    console.log(`FAIL ${name}: ${e.message}`);
+    const cause = e.cause ? ` (${e.cause.code ?? e.cause.message})` : '';
+    const where = String(e.stack).split(String.fromCharCode(10)).slice(1, 4).join(' | ');
+    console.log(`FAIL ${name}: ${e.message}${cause} at ${where}`);
   }
 }
 const failed = results.filter((r) => !r).length;

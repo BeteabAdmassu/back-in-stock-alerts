@@ -13,7 +13,7 @@ export const HTML_TYPE = 'text/html; charset=utf-8';
 
 export const newNonce = (): string => randomBytes(16).toString('base64');
 
-const pagePolicy = (nonce: string, frameAncestors: string): string =>
+const pagePolicy = (nonce: string, ...extra: string[]): string =>
   [
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
@@ -22,11 +22,12 @@ const pagePolicy = (nonce: string, frameAncestors: string): string =>
     'img-src https: data:',
     "form-action 'self'",
     "base-uri 'none'",
-    `frame-ancestors ${frameAncestors}`,
+    ...extra,
   ].join('; ');
 
-export const embedCsp = (nonce: string): string => pagePolicy(nonce, '*');
-export const adminCsp = (nonce: string): string => pagePolicy(nonce, "'none'");
+// No frame-ancestors at all: `frame-ancestors *` would still refuse non-network parents like file:.
+export const embedCsp = (nonce: string): string => pagePolicy(nonce);
+export const adminCsp = (nonce: string): string => pagePolicy(nonce, "frame-ancestors 'none'");
 /** For everything that is not a page, such as JSON and redirects. */
 export const NON_PAGE_CSP = "default-src 'none'; frame-ancestors 'none'";
 

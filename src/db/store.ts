@@ -29,7 +29,7 @@ import { transaction } from './database.ts';
 //   was re-claimed. That remaining window needs a worker to outlive leaseMs (which must exceed
 //   httpTimeoutMs) and is bounded by the idempotency key: a stale write can at worst requeue the
 //   row, and the next send is deduplicated. It cannot erase doubt: re-claiming a row with a send in
-//   flight has already set ambiguous_send=1, and only an admin retry ever clears that flag.
+//   flight has already set ambiguous_send=1, and nothing ever clears that flag.
 // - beginSend also refuses while send_in_flight=1, so a stalled holder that wakes up cannot start a
 //   send over the row's new holder. Two sends can therefore overlap only after a re-claim recorded
 //   the first as ambiguous, so refusing one can never leave a clean row with the other in the air.
@@ -110,6 +110,9 @@ function toEvent(raw: RawEvent): WebhookEventRow {
   };
 }
 
+/** How long a repeat request can wait for a sell-out before it is emailed anyway. */
+const REPEAT_SUPPRESSION_MS = 24 * 60 * 60 * 1000;
+
 const skuKeyOf = (sku: string): string => sku.trim().toUpperCase();
 const normaliseEmail = (email: string): string => email.trim().toLowerCase();
 const escapeLike = (text: string): string => text.replace(/[\\%_]/g, '\\$&');
@@ -122,8 +125,8 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
 
   const selectRequest = db.prepare('SELECT * FROM requests WHERE id = ?');
   const insertRequest = db.prepare(`
-    INSERT INTO requests (id, email, sku, sku_key, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'open', ?, ?)
+    INSERT INTO requests (id, email, sku, sku_key, status, created_at, updated_at, suppress_until)
+    VALUES (?, ?, ?, ?, 'open', ?, ?, ?)
     ON CONFLICT (email, sku_key) WHERE status IN ('open', 'queued', 'sending') DO NOTHING
     RETURNING *
   `);
@@ -131,6 +134,16 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
     SELECT * FROM requests
     WHERE email = ? AND sku_key = ? AND status IN ('open', 'queued', 'sending')
   `);
+  const selectLastNotified = db.prepare(`
+    SELECT MAX(notified_at) AS at FROM requests
+    WHERE email = ? AND sku_key = ? AND status = 'notified'
+  `);
+  const selectOpenSpellings = db.prepare(
+    "SELECT DISTINCT sku FROM requests WHERE sku_key = ? AND status = 'open' ORDER BY sku",
+  );
+  const clearSuppression = db.prepare(
+    'UPDATE requests SET suppress_until = NULL WHERE sku_key = ? AND suppress_until IS NOT NULL',
+  );
   const upsertCheck = db.prepare(`
     INSERT INTO stock_checks (sku_key, query_sku, generation, due_at, attempts)
     VALUES (?, ?, 1, ?, 0)
@@ -178,8 +191,9 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       next_attempt_at = ?,
       verified_at = ?,
       updated_at = ?,
+      suppress_until = NULL,
       product_json = CASE WHEN attempts = 0 THEN ? ELSE product_json END
-    WHERE sku_key = ? AND status = 'open'
+    WHERE sku_key = ? AND status = 'open' AND (suppress_until IS NULL OR suppress_until <= ?)
   `);
   const settleEvents = db.prepare(`
     UPDATE webhook_events SET outcome = ?, processed_at = ?, verified_quantity = ?
@@ -289,7 +303,6 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       next_attempt_at = ?,
       lease_until = NULL,
       send_in_flight = 0,
-      ambiguous_send = 0,
       last_error = NULL,
       updated_at = ?
     WHERE id = ? AND status = 'failed'
@@ -323,7 +336,19 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       const skuKey = skuKeyOf(trimmedSku);
       return transaction(db, () => {
         const now = nowIso();
-        const inserted = insertRequest.get(randomUUID(), normalEmail, trimmedSku, skuKey, now, now);
+        const last = selectLastNotified.get(normalEmail, skuKey) as { at: string | null };
+        const suppressUntil = last.at
+          ? new Date(Date.parse(last.at) + REPEAT_SUPPRESSION_MS).toISOString()
+          : null;
+        const inserted = insertRequest.get(
+          randomUUID(),
+          normalEmail,
+          trimmedSku,
+          skuKey,
+          now,
+          now,
+          suppressUntil !== null && suppressUntil > now ? suppressUntil : null,
+        );
         if (inserted) {
           enqueueCheck(trimmedSku, now);
           return { request: toRequest(inserted as unknown as RawRequest), created: true };
@@ -424,6 +449,11 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
       return selectOpenExists.get(skuKeyOf(skuKey)) !== undefined;
     },
 
+    openSkuSpellings(skuKey) {
+      const rows = selectOpenSpellings.all(skuKeyOf(skuKey)) as unknown as { sku: string }[];
+      return rows.map((row) => row.sku);
+    },
+
     completeStockCheck(claim: StockCheckClaim, outcome: StockCheckOutcome) {
       const heldLease = leaseFrom(Date.parse(claim.claimedAt));
       return transaction(db, () => {
@@ -436,7 +466,9 @@ export function createStore(deps: { db: DatabaseSync; clock: Clock; leaseMs: num
         let queued = 0;
         if (outcome.kind === 'in_stock') {
           const productJson = outcome.product === null ? null : JSON.stringify(outcome.product);
-          queued = Number(promoteOpen.run(now, now, now, productJson, claim.skuKey).changes);
+          queued = Number(promoteOpen.run(now, now, now, productJson, claim.skuKey, now).changes);
+        } else if (outcome.kind === 'out_of_stock') {
+          clearSuppression.run(claim.skuKey);
         }
         const verifiedQuantity = outcome.kind === 'skipped' ? null : outcome.quantity;
         settleEvents.run(outcome.kind, now, verifiedQuantity, claim.skuKey, claim.claimedAt);

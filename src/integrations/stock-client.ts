@@ -55,7 +55,11 @@ function readStock(body: Record<string, unknown>): { quantity: number; available
   const { quantity, in_stock: inStock } = body;
   if (!isCount(quantity)) return null;
   if (inStock !== undefined && typeof inStock !== 'boolean') return null;
-  return { quantity, available: quantity > 0 && inStock !== false };
+  return {
+    // Whole and safe to store; availability comes from the value the API actually sent.
+    quantity: Math.min(Math.floor(quantity), Number.MAX_SAFE_INTEGER),
+    available: quantity > 0 && inStock !== false,
+  };
 }
 
 async function discardBody(response: Response): Promise<void> {

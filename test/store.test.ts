@@ -165,10 +165,12 @@ test('a new request is allowed once the previous one is notified or failed', () 
   assert.equal(afterNotified.created, true);
   assert.notEqual(afterNotified.request.id, first.id);
 
-  promote(store, 'SKU-1');
+  const second = store.createRequest({ email: 'b@example.com', sku: 'SKU-2' });
+  promote(store, 'SKU-2');
   store.markEmailFailed(claimOne(store).id, { error: 'rejected', ambiguous: false });
-  const afterFailed = store.createRequest({ email: 'a@example.com', sku: 'SKU-1' });
+  const afterFailed = store.createRequest({ email: 'b@example.com', sku: 'SKU-2' });
   assert.equal(afterFailed.created, true);
+  assert.notEqual(afterFailed.request.id, second.request.id);
 });
 
 test('requests stay duplicate-free while queued and sending', () => {
@@ -936,7 +938,7 @@ test('retryFailed requeues a failed row with the same id and a kept snapshot', (
   assert.equal(row.status, 'queued');
   assert.equal(row.attempts, 0);
   assert.equal(row.firstAttemptAt, null);
-  assert.equal(row.ambiguousSend, false);
+  assert.equal(row.ambiguousSend, true, 'a retry does not make a possible delivery any less so');
   assert.equal(row.sendInFlight, false);
   assert.equal(row.nextAttemptAt, iso());
   assert.deepEqual(row.product, { name: 'snapshot' });

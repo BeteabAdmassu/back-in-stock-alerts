@@ -9,17 +9,20 @@ export interface EmailClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-/** A Retry-After beyond this is treated as this. Also keeps the resulting Date valid. */
-const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+/** A Retry-After beyond this is treated as this, so it can't use up the 23h retry window. */
+const MAX_RETRY_AFTER_MS = 60 * 60 * 1000;
+
+/** The request may have reached the provider before this response was produced. */
+const AMBIGUOUS_STATUSES = new Set([408, 502, 504]);
 
 /** Statuses where a response refuses this attempt but a later one could succeed. */
 function isRetryableStatus(status: number): boolean {
-  return status === 401 || status === 403 || status === 409 || status === 429 || status >= 500;
+  return [401, 403, 408, 409, 425, 429].includes(status) || status >= 500;
 }
 
 /** Statuses where ARCHITECTURE.md says to honour Retry-After. 401 and 403 are operator problems. */
 function honoursRetryAfter(status: number): boolean {
-  return status === 409 || status === 429 || status >= 500;
+  return [408, 409, 425, 429].includes(status) || status >= 500;
 }
 
 /** Accepts delta-seconds or an HTTP date. A date already past, or garbage, gives undefined. */
@@ -66,9 +69,10 @@ async function refusedResult(response: Response): Promise<SendResult> {
     const retryAfterMs = honoursRetryAfter(status)
       ? parseRetryAfter(response.headers.get('retry-after'))
       : undefined;
+    const ambiguous = AMBIGUOUS_STATUSES.has(status);
     return retryAfterMs === undefined
-      ? { kind: 'retryable', ambiguous: false, error }
-      : { kind: 'retryable', ambiguous: false, error, retryAfterMs };
+      ? { kind: 'retryable', ambiguous, error }
+      : { kind: 'retryable', ambiguous, error, retryAfterMs };
   }
   // A 1xx or non-redirect 3xx is not a refusal we understand, so the send may have gone through.
   return { kind: 'retryable', ambiguous: true, error };

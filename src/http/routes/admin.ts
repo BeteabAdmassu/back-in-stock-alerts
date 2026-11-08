@@ -111,7 +111,9 @@ export function adminRoutes(
     reply
       .header('Cache-Control', 'no-store')
       .header('Content-Security-Policy', adminCsp(nonce))
-      .header('X-Frame-Options', 'DENY');
+      .header('X-Frame-Options', 'DENY')
+      // With no-referrer, browsers send `Origin: null` on form POSTs, which the check below rejects.
+      .header('Referrer-Policy', 'same-origin');
 
     const { origin } = request.headers;
     if (

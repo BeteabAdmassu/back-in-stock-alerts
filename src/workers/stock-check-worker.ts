@@ -34,13 +34,26 @@ export function createStockCheckWorker(options: StockCheckWorkerOptions): Worker
     }
   }
 
+  /** In stock under any spelling wins. Otherwise a failure means we can't say it's out of stock. */
+  async function fetchAcrossSpellings(claim: StockCheckClaim): Promise<StockResult> {
+    const others = store.openSkuSpellings(claim.skuKey).filter((sku) => sku !== claim.querySku);
+    let settled = await fetchStock(claim.querySku);
+    if (settled.kind === 'ok' && settled.available) return settled;
+    for (const sku of others) {
+      const result = await fetchStock(sku);
+      if (result.kind === 'ok' && result.available) return result;
+      if (result.kind === 'error') settled = result;
+    }
+    return settled;
+  }
+
   async function check(claim: StockCheckClaim): Promise<void> {
     if (!store.hasOpenRequests(claim.skuKey)) {
       store.completeStockCheck(claim, { kind: 'skipped' });
       return;
     }
 
-    const result = await fetchStock(claim.querySku);
+    const result = await fetchAcrossSpellings(claim);
 
     if (result.kind === 'error') {
       const attempts = claim.attempts + 1;

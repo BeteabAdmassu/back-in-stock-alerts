@@ -7,7 +7,7 @@ concurrency model easy to reason about.
 
 ```
  store iframe ─ GET /embed ─┐
- POST /api/requests ────────┼─► services ─► Store (SQLite: requests, webhook_events, stock_checks)
+ POST /api/requests ────────┼─► routes ───► Store (SQLite: requests, webhook_events, stock_checks)
  POST /webhooks/stock ──────┤                  ▲                 ▲
  GET /admin ────────────────┘                  │                 │
                              stock-check worker┘                 └ email worker
@@ -30,7 +30,7 @@ alive.
 | `src/db/` | Schema, migrations, `Store` | contracts |
 | `src/integrations/` | Stock and email HTTP clients | contracts |
 | `src/email/` | Email template (pure) | contracts |
-| `src/workers/` | Poller, stock-check worker, email worker, reconciler | contracts |
+| `src/workers/` | Poller, stock-check worker, email worker, reconciler | contracts, email |
 | `src/http/` | Fastify app, routes, auth; `views/` are pure HTML functions | contracts, domain |
 | `src/index.ts` | Composition root and signal handling | everything |
 
@@ -48,7 +48,10 @@ Modules receive their collaborators as arguments; only `index.ts` builds concret
 ```
 
 A new request can be made for the same customer and SKU once the previous one is `notified` or
-`failed`, which is what supports future restock cycles.
+`failed`, which is what supports future restock cycles. A repeat request within 24h of a notification
+stays `open` until a stock check observes a sell-out, so repeating a POST while the item is still in
+stock sends nothing. If no sell-out is seen within those 24h, the request is treated normally: a
+restock and sell-out both falling between checks can't silence it for good.
 
 ## How each guarantee is met
 
@@ -104,9 +107,12 @@ write-ahead flag and the idempotency key.
 | --- | --- | --- |
 | 2xx | Accepted | `notified` |
 | 400, 404, 405, 422 and other 4xx not listed below | Will never succeed | `failed` |
+| 408 | Timed out at the provider, may have been accepted | retry, `ambiguous_send` set |
+| 425 | Too early | retry, definite refusal |
 | 401, 403 | Probably a config problem an operator can fix | retry, definite refusal |
 | 409, 429 | Concurrent key use or rate limit | retry, definite refusal, honour `Retry-After` |
-| 5xx | Refused | retry, definite refusal, honour `Retry-After` |
+| 502, 504 | A gateway may have forwarded it | retry, `ambiguous_send` set |
+| Other 5xx | Refused | retry, definite refusal, honour `Retry-After` (capped at 1h) |
 | Timeout, connection error | May have been accepted | retry, `ambiguous_send` stays set |
 
 ## Security
@@ -114,7 +120,7 @@ write-ahead flag and the idempotency key.
 - Webhook secret and admin password are compared in constant time over SHA-256 digests.
 - `/admin` accepts HTTP Basic (any username) or a signed, expiring, `HttpOnly`, `SameSite=Strict`
   session cookie from the login page. Admin POSTs also check `Origin`. Login failures are throttled.
-- `/embed` allows framing by anyone; everything else is `frame-ancestors 'none'`. Pages use a
+- `/embed` sets no `frame-ancestors`, so anyone can frame it; everything else is `frame-ancestors 'none'`. Pages use a
   per-response CSP nonce. `/embed` sets no cookies.
 - All values in HTML are escaped. SKUs are limited to `[A-Za-z0-9._-]`, max 64 chars, and URL-encoded
   when calling the stock API. Bearer tokens are never sent across redirects.
