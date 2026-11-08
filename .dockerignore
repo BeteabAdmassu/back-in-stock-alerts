@@ -1,3 +1,14 @@
 data
-harness/data
+harness
 .git
+.github
+node_modules
+dist
+test
+docs
+.env
+.env.*
+*.md
+*.db
+*.db-wal
+*.db-shm

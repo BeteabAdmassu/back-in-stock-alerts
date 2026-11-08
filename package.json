@@ -1,0 +1,26 @@
+{
+  "name": "back-in-stock-alerts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Back-in-stock email alerts: embeddable form, verified webhooks, exactly-once-effect notifications.",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "node --env-file=.env --watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=4 \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run lint && npm test"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
