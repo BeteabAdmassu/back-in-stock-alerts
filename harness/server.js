@@ -409,7 +409,11 @@ async function route(req, res) {
     if (!sku) return json(res, 200, { products: CATALOG.map((pr) => ({ ...pr, quantity: c.stock[pr.sku] || 0, in_stock: c.stock[pr.sku] > 0 })) });
     const quantity = Number(c.stock[sku] ?? c.stock[sku.toUpperCase()] ?? 0);
     pushCapped(c.stockChecks, { at: now(), sku, quantity }, 500); save();
-    return json(res, 200, { ...(CATALOG_BY_SKU[sku.toUpperCase()] || {}), sku, quantity, in_stock: quantity > 0 });
+    const known = CATALOG_BY_SKU[sku.toUpperCase()]
+      || ((c.stock[sku] ?? c.stock[sku.toUpperCase()]) !== undefined
+        ? { name: `Sample item ${sku.toUpperCase()}`, price: 10, currency: 'GBP', category: 'Other', image: `https://picsum.photos/seed/${encodeURIComponent(sku)}/600/600` }
+        : {});
+    return json(res, 200, { ...known, sku, quantity, in_stock: quantity > 0 });
   }
 
   // Test API: force store events. Same key as the stock API.
