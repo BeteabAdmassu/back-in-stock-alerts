@@ -4,7 +4,9 @@
   "private": true,
   "description": "Back-in-stock email alerts: embeddable form, verified webhooks, exactly-once-effect notifications.",
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "node --env-file=.env --watch src/index.ts",
     "start": "node dist/index.js",

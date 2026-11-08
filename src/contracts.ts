@@ -92,7 +92,9 @@ export interface RequestRow {
   firstAttemptAt: string | null;
   nextAttemptAt: string | null;
   leaseUntil: string | null;
-  /** True if an earlier attempt may have been accepted by the provider. */
+  /** An HTTP send was started and has no recorded outcome yet. Durable write-ahead marker. */
+  sendInFlight: boolean;
+  /** Sticky: some earlier attempt may have been accepted by the provider. */
   ambiguousSend: boolean;
   lastError: string | null;
   providerId: string | null;
@@ -176,31 +178,44 @@ export interface Store {
   rescheduleStockCheck(claim: StockCheckClaim, error: string, dueAt: Date): void;
 
   /**
-   * Claims due queued rows and rows in `sending` whose lease expired (a crash mid-send). In one
-   * statement per row: status=sending, lease set, attempts+1, first_attempt_at set if null, and
-   * ambiguous_send=1 (write-ahead: until proven otherwise, this attempt may reach the provider).
+   * Claims due queued rows and rows in `sending` whose lease expired (a crash mid-send), setting
+   * status=sending and the lease. If the row has send_in_flight=1, the previous holder died with
+   * an unknown outcome: ambiguous_send becomes 1 and send_in_flight 0.
    */
   claimDueEmails(limit: number): RequestRow[];
-  /** Terminal success. Guarded on status=sending and the row's lease: a stale worker is a no-op. */
+  /**
+   * Write-ahead, committed immediately before the HTTP call: send_in_flight=1, attempts+1,
+   * first_attempt_at set if null. Returns false, and the caller must not send or touch the row, if
+   * it is not in `sending` under a live lease or another send is already in flight.
+   */
+  beginSend(id: string): boolean;
+  /** Terminal success. Requires status=sending, not the lease: acceptance is a fact. */
   markEmailSent(id: string, providerId: string | null): void;
-  /** Back to queued. ambiguous=false clears ambiguous_send: the provider definitely refused it. */
+  /**
+   * Back to queued, send_in_flight=0. ambiguous=true sets ambiguous_send=1; ambiguous=false leaves
+   * it alone, since a refusal proves nothing about earlier attempts.
+   */
   markEmailRetry(
     id: string,
     input: { error: string; nextAttemptAt: Date; ambiguous: boolean },
   ): void;
-  markEmailFailed(id: string, error: string): void;
+  /** Terminal failure, send_in_flight=0. `ambiguous` as in markEmailRetry. */
+  markEmailFailed(id: string, input: { error: string; ambiguous: boolean }): void;
   /** Records a fresh stock verification for a claimed row. */
   touchVerified(id: string): void;
   /**
-   * Stock is gone before sending. Only legal when ambiguous_send is false: returns the row to open
-   * with attempts, first_attempt_at and the product snapshot cleared, and enqueues nothing. Returns
-   * false (changing nothing) if the row may already have been delivered.
+   * Stock is gone before sending. Only legal when ambiguous_send=0 and send_in_flight=0: returns
+   * the row to open with attempts, first_attempt_at and the product snapshot cleared, and enqueues
+   * nothing. Returns false (changing nothing) if the row may already have been delivered.
    */
   holdForStock(id: string): boolean;
   /** Admin action: failed back to queued, attempts reset. Returns false if not failed. */
   retryFailed(id: string): boolean;
 
-  /** Releases all leases at startup: this process is the only worker, so they are orphans. */
+  /**
+   * Releases all leases at startup: this process is the only worker, so they are orphans. Emails in
+   * `sending` return to queued, due now, with send_in_flight converted to ambiguous_send.
+   */
   recoverAfterRestart(): { emails: number; checks: number };
   /** Deletes webhook events older than the date. Returns the number deleted. */
   purgeWebhookEventsBefore(date: Date): number;

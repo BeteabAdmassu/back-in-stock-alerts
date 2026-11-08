@@ -18,6 +18,7 @@ export const MIGRATIONS: readonly string[] = [
     first_attempt_at TEXT,
     next_attempt_at  TEXT,
     lease_until      TEXT,
+    send_in_flight   INTEGER NOT NULL DEFAULT 0 CHECK (send_in_flight IN (0, 1)),
     ambiguous_send   INTEGER NOT NULL DEFAULT 0 CHECK (ambiguous_send IN (0, 1)),
     last_error       TEXT,
     provider_id      TEXT,

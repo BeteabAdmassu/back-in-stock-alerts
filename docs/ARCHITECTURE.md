@@ -77,8 +77,10 @@ who signs up just after the restock webhook, or for an item already in stock, st
 **Once, not zero, not twice.**
 1. A request row is a single email, so at most one send can be in progress per request.
 2. Claiming is an atomic update setting a lease, so two workers cannot hold the same row.
-3. `ambiguous_send` is set *before* the HTTP call (write-ahead) and cleared only when the provider
-   definitely refused. A crash at any point therefore leaves a row known to be possibly delivered.
+3. `send_in_flight` is committed *before* the HTTP call (write-ahead) and cleared once the outcome
+   is recorded. A row found with it set after a crash had an unknown outcome and gets the sticky
+   `ambiguous_send` flag, as does a timeout. A later refusal never clears that flag, because it says
+   nothing about the earlier attempt.
 4. Every attempt uses `Idempotency-Key: back-in-stock/<request id>`, stable across retries and
    restarts, so a retry of a send that actually succeeded is deduplicated by the provider.
 5. The snapshot and rendering are frozen once a send is attempted, because providers reject a reused
